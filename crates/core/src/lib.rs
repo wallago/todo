@@ -1,20 +1,4 @@
 //! Core todo model: plain data, no I/O.
-//!
-//! A [`Todo`] maps one-to-one onto an Obsidian Tasks plugin line:
-//!
-//! ```text
-//! - [ ] buy milk ⏫ ➕ 2026-10-24 📅 2026-10-30 #errand ^k3x9a2
-//!   │   │        │  │             │             │       └ id
-//!   │   │        │  │             │             └ tags
-//!   │   │        │  │             └ due
-//!   │   │        │  └ created
-//!   │   │        └ priority
-//!   │   └ text
-//!   └ status
-//! ```
-//!
-//! Parsing and writing that line lives in the `md` crate; this crate only
-//! holds the shape and the rules for changing it.
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
