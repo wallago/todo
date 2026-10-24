@@ -1,0 +1,21 @@
+[package]
+name         = "todo-md"
+version      = "0.1.0"
+description  = "Read and write todos in Obsidian markdown notes. No I/O."
+authors      = ["wallago <tbd@gmail.com>"]
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/wallago/todo"
+edition      = "2024"
+rust-version = "1.88"
+
+[dependencies]
+chrono    = { version = "0.4", default-features = false }
+thiserror = "2.0.19"
+todo-core = { path = "../core" }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+proptest          = "1"
+
+[lints]
+workspace = true
