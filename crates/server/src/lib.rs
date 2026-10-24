@@ -1,4 +1,4 @@
-//! Just a personal Todo app.
+//! Server todo app.
 
 /// Main application.
 pub mod app;
@@ -19,7 +19,7 @@ use prelude::*;
 
 use crate::config::Config;
 
-/// Runs `todo`.
+/// Runs `server`.
 ///
 /// # Errors
 ///

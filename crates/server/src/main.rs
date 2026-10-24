@@ -1,9 +1,9 @@
-//! Command line entry point for `todo`.
+//! Command line entry point for `server`.
 
 use std::process::exit;
 
 use clap::Parser;
-use todo::{prelude::*, version};
+use server::{prelude::*, version};
 use tracing::Level;
 
 /// Runs the crate and maps the outcome to a process exit code.
@@ -27,7 +27,7 @@ async fn main() {
     }
 
     tracing::info!("welcome into {}", version!());
-    match todo::run(&args).await {
+    match server::run(&args).await {
         Ok(()) => exit(0),
         Err(e) => {
             eprintln!("{e}");

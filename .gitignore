@@ -1,1 +1,13 @@
-/target
+# ── Rust / Cargo ─────────────────────────────────────────────
+# Compiled files, executables, and build artifacts
+debug/
+target/
+
+
+# ── Nix ──────────────────────────────────────────────────────
+# Build result symlinks (result, result-bin, result-1, …)
+/result
+/result-*
+
+# ── Local development environment ────────────────────────────
+.direnv/

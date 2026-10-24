@@ -10,7 +10,7 @@ use clap::Parser;
     about,
     rename_all_env = "screaming-snake",
     help_template = "\
-{before-help}todo {version}
+{before-help}server {version}
 {author-with-newline}{about-with-newline}
 {usage-heading}
   {usage}

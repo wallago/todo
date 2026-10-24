@@ -1,0 +1,27 @@
+[package]
+name = "server"
+version = "0.1.0"
+description = "Server todo app."
+authors = ["wallago <tbd@gmail.com>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/wallago/server"
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+better-panic = "0.3.0"
+clap = { version = "4.6.6", features = ["derive", "env", "wrap_help", "cargo"] }
+dirs = "6.0.0"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.19"
+tokio = { version = "1.52.3", features = ["full"] }
+toml = "1.1.4"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+axum = { version = "0.8.9", features = ["ws"] }
+
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+rstest = "0.26"
