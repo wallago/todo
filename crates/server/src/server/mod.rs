@@ -55,7 +55,9 @@ mod tests {
 
     #[tokio::test]
     async fn health_is_ok() {
-        let request = Request::get("/health").body(Body::empty()).expect("valid request");
+        let request = Request::get("/health")
+            .body(Body::empty())
+            .expect("valid request");
         let response = routes().oneshot(request).await.expect("infallible");
         assert_eq!(response.status(), StatusCode::OK);
     }
