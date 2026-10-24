@@ -1,18 +1,6 @@
-[package]
-name = "todo"
-version = "0.1.0"
-description = "Just a personal Todo app."
-authors = ["wallago <tbd@gmail.com>"]
-license = "MIT OR Apache-2.0"
-readme = "README.md"
-repository = "https://github.com/wallago/todo"
-keywords = []
-categories = []
-edition = "2024"
-rust-version = "1.88"
-
 [workspace]
-members = ["crates/*"]
+members  = ["crates/*"]
+resolver = "3"
 
 [profile.dev]
 opt-level = 0
@@ -50,5 +38,3 @@ dbg_macro = "warn"
 print_stdout = "warn"
 missing_docs_in_private_items = "warn"
 
-[lints]
-workspace = true
