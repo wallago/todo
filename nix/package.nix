@@ -8,11 +8,15 @@
 naersk'.buildPackage {
   name = "todo";
   inherit src release;
-
-  buildInputs = with pkgs; [
-    pkg-config
-    udev
-  ];
+  cargoBuildOptions =
+    opts:
+    opts
+    ++ [
+      "-p"
+      "todo-server"
+      # "-p"
+      # "todo-mcp"
+    ];
   meta = {
     description = "Just a personal Todo app.";
     license = with lib.licenses; [
