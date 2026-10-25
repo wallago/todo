@@ -356,12 +356,16 @@ mod tests {
             ("b.md", "- [ ] copy ^aaaaaa\n"),
         ]);
         let store = Store::open(dir.path(), "a.md")?;
+        // a.md loads first, so it keeps the id.
         assert_eq!(
             store.get(&id("aaaaaa")).map(|t| t.text.as_str()),
             Some("first")
         );
-        assert_eq!(store.todos().count(), 2);
-        assert!(!read(&dir, "b.md").contains("^aaaaaa"));
+        assert_eq!(read(&dir, "a.md"), "- [ ] first ^aaaaaa\n");
+        // The copy in b.md gets a new one, saved to the note.
+        let copy = store.todos().find(|t| t.text == "copy").expect("copy");
+        assert_ne!(copy.id, id("aaaaaa"));
+        assert_eq!(read(&dir, "b.md"), format!("- [ ] copy ^{}\n", copy.id.0));
         Ok(())
     }
 
