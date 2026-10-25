@@ -35,62 +35,62 @@ in
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       description = "Package with the todo-server and todo-mcp binaries.";
     };
-  };
 
-  server = {
-    enable = lib.mkEnableOption "the todo server";
-    inherit verbose;
-    user = lib.mkOption {
-      type = lib.types.str;
-      default = "todo";
-      description = "User the server runs as. Needs write access to the vault.";
-    };
-    group = lib.mkOption {
-      type = lib.types.str;
-      default = "todo";
-    };
-    settings = lib.mkOption {
-      type = settingsFormat.type;
-      example = {
-        server.port = 3000;
-        vault = {
-          root = "/srv/vault";
-          inbox = "todo.md";
-        };
+    server = {
+      enable = lib.mkEnableOption "the todo server";
+      inherit verbose;
+      user = lib.mkOption {
+        type = lib.types.str;
+        default = "todo";
+        description = "User the server runs as. Needs write access to the vault.";
       };
-      description = ''
-        Written to config.toml. `vault.root` must be absolute:
-        a relative path would resolve inside the Nix store.
-      '';
+      group = lib.mkOption {
+        type = lib.types.str;
+        default = "todo";
+      };
+      settings = lib.mkOption {
+        type = settingsFormat.type;
+        example = {
+          server.port = 3000;
+          vault = {
+            root = "/srv/vault";
+            inbox = "todo.md";
+          };
+        };
+        description = ''
+          Written to config.toml. `vault.root` must be absolute:
+          a relative path would resolve inside the Nix store.
+        '';
+      };
     };
-  };
 
-  mcp = {
-    enable = lib.mkEnableOption "the todo MCP server over HTTP";
-    inherit verbose;
-    listen = lib.mkOption {
-      type = lib.types.str;
-      default = "127.0.0.1:3001";
-      description = "TODO_MCP_LISTEN. Endpoint is /mcp.";
+    mcp = {
+      enable = lib.mkEnableOption "the todo MCP server over HTTP";
+      inherit verbose;
+      listen = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1:3001";
+        description = "TODO_MCP_LISTEN. Endpoint is /mcp.";
+      };
+      allowedHosts = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "homelab" ];
+        description = "TODO_MCP_ALLOWED_HOSTS. Loopback is always allowed.";
+      };
+      serverUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "http://127.0.0.1:${toString serverPort}";
+        description = "TODO_SERVER_URL.";
+      };
     };
-    allowedHosts = lib.mkOption {
+
+    firewallInterfaces = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "homelab" ];
-      description = "TODO_MCP_ALLOWED_HOSTS. Loopback is always allowed.";
+      example = [ "wg0" ];
+      description = "Open the enabled services' ports on these interfaces only.";
     };
-    serverUrl = lib.mkOption {
-      type = lib.types.str;
-      default = "http://127.0.0.1:${toString serverPort}";
-      description = "TODO_SERVER_URL.";
-    };
-  };
-
-  firewallInterfaces = lib.mkOption {
-    type = lib.types.listOf lib.types.str;
-    default = [ ];
-    example = [ "wg0" ];
-    description = "Open the enabled services' ports on these interfaces only.";
   };
 
   config = lib.mkMerge [
