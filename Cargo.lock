@@ -2371,6 +2371,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "todo-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 2.0.21",
+ "todo-core",
+ "todo-md",
+]
+
+[[package]]
 name = "tokio"
 version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

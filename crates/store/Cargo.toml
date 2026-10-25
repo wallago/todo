@@ -1,0 +1,22 @@
+[package]
+name         = "todo-store"
+version      = "0.1.0"
+description  = "Owns the Obsidian vault: loads notes, finds todos by id, writes changes back."
+authors      = ["wallago <tbd@gmail.com>"]
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/wallago/todo"
+edition      = "2024"
+rust-version = "1.88"
+
+[dependencies]
+thiserror = "2.0.19"
+todo-core = { path = "../core" }
+todo-md   = { path = "../md" }
+
+[dev-dependencies]
+chrono            = { version = "0.4", default-features = false }
+pretty_assertions = "1.4.1"
+tempfile          = "3"
+
+[lints]
+workspace = true
