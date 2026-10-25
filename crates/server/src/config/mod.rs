@@ -6,15 +6,19 @@ use serde::Deserialize;
 
 use crate::prelude::*;
 
-/// Server settings. 
+/// Server settings.
 pub(crate) mod server;
+/// Vault settings.
+pub(crate) mod vault;
 
 /// Configuration loaded from `config.toml`.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     /// Server config.
     pub(crate) server: server::ServerConfig,
+    /// Vault config.
+    pub(crate) vault: server::ServerConfig,
 }
 
 impl Config {
@@ -32,7 +36,7 @@ impl Config {
             .map(|dir| dir.join(format!("{}/config.toml", env!("CARGO_PKG_NAME"))))
         {
             Some(path) if path.exists() => Self::from_file(&path),
-            _ => Ok(Self::default()),
+            _ => Err(Error::Config("file not found".to_string())),
         }
     }
 

@@ -4,6 +4,10 @@
     flake-utils.url = "github:numtide/flake-utils";
     naersk.url = "github:nix-community/naersk";
     rust-overlay.url = "github:oxalica/rust-overlay";
+    claude-code = {
+      url = "github:sadjow/claude-code-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -48,19 +52,22 @@
 
             # ── Build helper ──────────────────────────────────────────
             buildApp =
-            { release }:
-            pkgs.callPackage ./nix/package.nix {
-              inherit naersk' release pkgs;
-              src = ./.;
-            };
+              { release }:
+              pkgs.callPackage ./nix/package.nix {
+                inherit naersk' release pkgs;
+                src = ./.;
+              };
+
+            # ── Claude Settings ─────────────────────────────────────
+            claude = inputs.claude-code.packages.${system}.default;
 
             # ── Tooling shared ────────────────────────────────────────
-            ciTools = with pkgs; [
+            ciTools = [
               rust
             ];
             devTools = with pkgs; [
               rust-analyzer
-              websocat
+              claude
             ];
           in
           {
