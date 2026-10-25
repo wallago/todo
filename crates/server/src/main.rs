@@ -3,7 +3,7 @@
 use std::process::exit;
 
 use clap::Parser;
-use server::{prelude::*, version};
+use todo_server::{prelude::*, version};
 use tracing::Level;
 
 /// Runs the crate and maps the outcome to a process exit code.
@@ -27,7 +27,7 @@ async fn main() {
     }
 
     tracing::info!("welcome into {}", version!());
-    match server::run(&args).await {
+    match todo_server::run(&args).await {
         Ok(()) => exit(0),
         Err(e) => {
             eprintln!("{e}");

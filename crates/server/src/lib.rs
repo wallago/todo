@@ -17,34 +17,19 @@ pub mod server;
 
 use prelude::*;
 
+use crate::app::AppState;
 use crate::config::Config;
 
 /// Runs `server`.
 ///
 /// # Errors
 ///
-/// Returns an [`Error`] if the run fa
+/// Returns an [`Error`] if the config can't be loaded or the server can't bind.
 pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
-    let _config = Config::load(args.config.as_deref())?;
-
-
-    tokio::select! {
-        result = server::start(&config.server.address, config.server.port, pdb_rx, seat_rx) => {
-            tracing::info!("Server stopped: {:?}", result);
-        },
-    }
+    let config = Config::load(args.config.as_deref())?;
+    let state = AppState::open(&config.vault.root, &config.vault.inbox)?;
+    server::start(&config.server.address, config.server.port, state).await?;
+    tracing::info!("Server stopped");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::*;
-
-    #[test]
-    fn run_succeeds() {
-        assert_eq!(run(Args::default()).is_ok(), true);
-    }
 }
