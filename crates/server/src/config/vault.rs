@@ -8,6 +8,14 @@ use serde::Deserialize;
 pub(crate) struct VaultConfig {
     /// Vault root path.
     pub(crate) root: PathBuf,
+    /// Note that new todos go to, relative to `root`.
+    #[serde(default = "default_inbox")]
+    pub(crate) inbox: PathBuf,
+}
+
+/// `todo.md` at the vault root.
+fn default_inbox() -> PathBuf {
+    PathBuf::from("todo.md")
 }
 
 #[cfg(test)]
@@ -25,6 +33,7 @@ mod tests {
         )
         .expect("failed to deserialize string");
         assert_eq!(Ok(config.root), PathBuf::from_str("../../../../vault/"));
+        assert_eq!(config.inbox, PathBuf::from("todo.md"));
         assert!(toml::from_str::<VaultConfig>("root = [\"../../../../vault/\"]").is_err());
     }
 }

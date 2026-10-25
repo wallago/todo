@@ -11,6 +11,9 @@ pub enum Error {
     /// Error that may occur while loading the application config file.
     #[error("Config file error: `{0}`")]
     Config(String),
+    /// Error that may occur while loading or writing the vault.
+    #[error("Vault error: `{0}`")]
+    Store(#[from] todo_store::Error),
 }
 
 /// Type alias for the standard [`Result`] type.

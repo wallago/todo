@@ -17,6 +17,7 @@ pub mod server;
 
 use prelude::*;
 
+use crate::app::AppState;
 use crate::config::Config;
 
 /// Runs `server`.
@@ -27,7 +28,8 @@ use crate::config::Config;
 pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
     let config = Config::load(args.config.as_deref())?;
-    server::start(&config.server.address, config.server.port).await?;
+    let state = AppState::open(&config.vault.root, &config.vault.inbox)?;
+    server::start(&config.server.address, config.server.port, state).await?;
     tracing::info!("Server stopped");
     Ok(())
 }
