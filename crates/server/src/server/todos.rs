@@ -264,4 +264,42 @@ mod tests {
         let (status, _) = send(&app, Method::DELETE, "/api/todos/aaaaaa", None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn client_round_trip() -> todo_client::Result<()> {
+        let (_dir, app) = test_app(NOTE);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = todo_client::Client::new(&format!("http://{addr}/"));
+
+        assert_eq!(client.list().await?.len(), 2);
+        let new = NewTodo {
+            text: "buy milk".into(),
+            ..NewTodo::default()
+        };
+        let todo = client.add(&new).await?;
+        assert_eq!(client.get(&todo.id).await?, todo);
+        let patch = TodoPatch {
+            due: Some(None),
+            ..TodoPatch::default()
+        };
+        assert_eq!(client.update(&Id("aaaaaa".into()), &patch).await?.due, None);
+        assert_eq!(client.complete(&todo.id).await?.status, Status::Done);
+        client.remove(&todo.id).await?;
+        assert!(client.get(&todo.id).await.is_err_and(|e| e.is_not_found()));
+
+        // The server's message comes through.
+        let empty = NewTodo::default();
+        match client.add(&empty).await {
+            Err(todo_client::Error::Api { status, message }) => {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert_eq!(message, "text is empty");
+            }
+            other => panic!("expected a 400, got {other:?}"),
+        }
+        Ok(())
+    }
 }
