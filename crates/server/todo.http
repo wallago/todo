@@ -1,0 +1,15 @@
+@host = http://localhost:3000
+
+### Health
+# @name health
+GET {{host}}/health
+
+### List every todo
+# @name list
+GET {{host}}/api/todos
+Accept: application/json
+
+### One todo by id (404 if unknown)
+# @name one
+GET {{host}}/api/todos/a1b2c3
+Accept: application/json
