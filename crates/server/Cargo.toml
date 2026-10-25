@@ -21,7 +21,7 @@ tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 axum = "0.8.9"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-todo-client = { path = "../client" }
+todo-client = { path = "../client", default-features = false }
 todo-core = { path = "../core" }
 todo-md = { path = "../md" }
 todo-store = { path = "../store" }
@@ -32,6 +32,7 @@ pretty_assertions = "1.4.1"
 rstest = "0.26"
 serde_json = "1"
 tempfile = "3"
+todo-client = { path = "../client" }
 tower = { version = "0.5", features = ["util"] }
 
 [lints]
