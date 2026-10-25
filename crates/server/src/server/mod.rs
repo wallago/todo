@@ -4,6 +4,8 @@ use axum::{Router, http::StatusCode, routing::get, serve};
 
 use crate::{app::AppState, prelude::*};
 
+/// Errors answered as JSON.
+mod api_error;
 /// `/api/todos`.
 mod todos;
 

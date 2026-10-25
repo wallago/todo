@@ -1,0 +1,21 @@
+[package]
+name         = "todo-client"
+version      = "0.1.0"
+description  = "Wire format shared by the server, the TUI and the MCP."
+authors      = ["wallago <tbd@gmail.com>"]
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/wallago/todo"
+edition      = "2024"
+rust-version = "1.88"
+
+[dependencies]
+chrono    = { version = "0.4", default-features = false, features = ["serde"] }
+serde     = { version = "1.0.229", features = ["derive"] }
+todo-core = { path = "../core" }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+serde_json        = "1"
+
+[lints]
+workspace = true
