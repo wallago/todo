@@ -1,11 +1,17 @@
 //! Server core.
 
-use axum::{Router, http::StatusCode, routing::get, serve};
+use axum::{Router, http::StatusCode, middleware, routing::get, serve};
 
-use crate::{app::AppState, config::mcp::McpConfig, prelude::*};
+use crate::{
+    app::AppState,
+    config::{mcp::McpConfig, server::ServerConfig},
+    prelude::*,
+};
 
 /// Errors answered as JSON.
 mod api_error;
+/// Bearer token.
+mod auth;
 /// `/mcp`.
 mod mcp;
 /// `/api/todos`.
@@ -16,25 +22,39 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
-/// Global server routes.
-fn routes(state: AppState, mcp_config: &McpConfig) -> Router {
+/// Global server routes. With a `token`, `/api` and `/mcp` need it.
+fn routes(state: AppState, mcp_config: &McpConfig, token: Option<auth::Token>) -> Router {
+    let protected = Router::new()
+        .merge(todos::routes())
+        .nest_service("/mcp", mcp::service(state.clone(), mcp_config));
+    let protected = match token {
+        Some(token) => protected.layer(middleware::from_fn_with_state(token, auth::require)),
+        None => protected,
+    };
     Router::new()
         .route("/health", get(health))
-        .merge(todos::routes())
-        .nest_service("/mcp", mcp::service(state.clone(), mcp_config))
+        .merge(protected)
         .with_state(state)
 }
 
 /// Start web services. Returns on Ctrl-C or SIGTERM (systemd stop).
 pub(super) async fn start(
-    address: &str,
-    port: u16,
+    config: &ServerConfig,
     state: AppState,
     mcp_config: &McpConfig,
 ) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(format!("{address}:{port}")).await?;
+    let token = config
+        .token_file
+        .as_deref()
+        .map(auth::Token::read)
+        .transpose()?;
+    if token.is_none() {
+        tracing::warn!("no `token_file`: /api and /mcp are open to anyone who can reach them");
+    }
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", config.address, config.port)).await?;
     tracing::info!("Server running on {}", listener.local_addr()?);
-    serve(listener, routes(state, mcp_config))
+    serve(listener, routes(state, mcp_config, token))
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
@@ -61,13 +81,22 @@ async fn shutdown() {
     }
 }
 
-/// A router over a temp vault holding one `todo.md` note.
+/// A router over a temp vault holding one `todo.md` note, without a token.
 #[cfg(test)]
 fn test_app(note: &str) -> (tempfile::TempDir, Router) {
+    test_router(note, None)
+}
+
+/// Same as [`test_app`], with this token.
+#[cfg(test)]
+fn test_router(note: &str, token: Option<auth::Token>) -> (tempfile::TempDir, Router) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("todo.md"), note).expect("write note");
     let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
-    (dir, routes(AppState::new(store), &McpConfig::default()))
+    (
+        dir,
+        routes(AppState::new(store), &McpConfig::default(), token),
+    )
 }
 
 #[cfg(test)]

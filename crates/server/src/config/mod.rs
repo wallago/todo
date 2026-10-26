@@ -63,9 +63,10 @@ impl Config {
         // Deserialize content in TOML format
         let mut config: Self = toml::from_str(&raw)
             .map_err(|error| Error::Config(format!("{}: {error}", path.display())))?;
-        // A relative vault path is relative to the config file, not the cwd.
+        // Relative paths are relative to the config file, not the cwd.
         if let Some(dir) = path.parent() {
             config.vault.root = dir.join(&config.vault.root);
+            config.server.token_file = config.server.token_file.map(|file| dir.join(file));
         }
         Ok(config)
     }

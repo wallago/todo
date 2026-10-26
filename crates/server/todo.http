@@ -5,26 +5,31 @@ GET {{host}}/health
 ### List every todo
 # @name list
 GET {{host}}/api/todos
+Authorization: Bearer {{token}}
 Accept: application/json
 
 ### Todos of one note
 # @name list_note
 GET {{host}}/api/todos?note=projects/dev.md
+Authorization: Bearer {{token}}
 Accept: application/json
 
 ### Every note in the vault
 # @name notes
 GET {{host}}/api/notes
+Authorization: Bearer {{token}}
 Accept: application/json
 
 ### One todo by id (404 if unknown)
 # @name one
 GET {{host}}/api/todos/a1b2c3
+Authorization: Bearer {{token}}
 Accept: application/json
 
 ### Add a todo (goes to the inbox note)
 # @name add
 POST {{host}}/api/todos
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
@@ -37,6 +42,7 @@ Content-Type: application/json
 ### Add a todo to another note (created if missing)
 # @name add_to_note
 POST {{host}}/api/todos
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
@@ -47,6 +53,7 @@ Content-Type: application/json
 ### Change some fields; "due": null clears the date
 # @name update
 PATCH {{host}}/api/todos/a1b2c3
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
@@ -58,7 +65,9 @@ Content-Type: application/json
 ### Tick it (safe to retry)
 # @name complete
 POST {{host}}/api/todos/a1b2c3/complete
+Authorization: Bearer {{token}}
 
 ### Delete it and its line
 # @name remove
 DELETE {{host}}/api/todos/a1b2c3
+Authorization: Bearer {{token}}

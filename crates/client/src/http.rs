@@ -1,5 +1,7 @@
 //! Request functions: one per server route.
 
+use std::fmt;
+
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
@@ -33,12 +35,24 @@ impl Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Talks to a todo server.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Client {
     /// Keeps connections open between calls.
     http: reqwest::Client,
     /// e.g. `http://127.0.0.1:3000`, without a trailing `/`.
     base: String,
+    /// Sent as `Authorization: Bearer`, if set.
+    token: Option<String>,
+}
+
+// By hand, so the token never ends up in logs.
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("base", &self.base)
+            .field("token", &self.token.as_ref().map(|_| "***"))
+            .finish_non_exhaustive()
+    }
 }
 
 // Every call fails the same way: see `Error`.
@@ -50,7 +64,15 @@ impl Client {
         Self {
             http: reqwest::Client::new(),
             base: base.trim_end_matches('/').to_owned(),
+            token: None,
         }
+    }
+
+    /// Sends `token` on every call, for a server with a `token_file`.
+    #[must_use]
+    pub fn with_token(mut self, token: &str) -> Self {
+        self.token = Some(token.to_owned());
+        self
     }
 
     /// Every todo.
@@ -68,7 +90,7 @@ impl Client {
 
     /// Every note's path, relative to the vault.
     pub async fn notes(&self) -> Result<Vec<String>> {
-        send(self.http.get(format!("{}/api/notes", self.base))).await
+        send(self.call(Method::GET, "/api/notes")).await
     }
 
     /// One todo.
@@ -89,8 +111,7 @@ impl Client {
 
     /// Ticks a todo. Safe to retry.
     pub async fn complete(&self, id: &Id) -> Result<Todo> {
-        let url = format!("{}/api/todos/{}/complete", self.base, id.0);
-        send(self.http.post(url)).await
+        send(self.call(Method::POST, &format!("/api/todos/{}/complete", id.0))).await
     }
 
     /// Removes a todo and its line.
@@ -101,11 +122,19 @@ impl Client {
 
     /// A request to `/api/todos`, or `/api/todos/{id}`.
     fn request(&self, method: Method, id: Option<&Id>) -> RequestBuilder {
-        let url = match id {
-            Some(id) => format!("{}/api/todos/{}", self.base, id.0),
-            None => format!("{}/api/todos", self.base),
-        };
-        self.http.request(method, url)
+        match id {
+            Some(id) => self.call(method, &format!("/api/todos/{}", id.0)),
+            None => self.call(method, "/api/todos"),
+        }
+    }
+
+    /// A request to `path`, with the token if there is one.
+    fn call(&self, method: Method, path: &str) -> RequestBuilder {
+        let request = self.http.request(method, format!("{}{path}", self.base));
+        match &self.token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
     }
 }
 

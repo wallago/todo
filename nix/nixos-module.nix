@@ -8,7 +8,12 @@ self:
 let
   cfg = config.services.todo;
   settingsFormat = pkgs.formats.toml { };
-  configFile = settingsFormat.generate "todo-server.toml" cfg.server.settings;
+  # systemd copies the token here (LoadCredential), readable by the service only.
+  tokenPath = "/run/credentials/todo-server.service/token";
+  settings = lib.recursiveUpdate cfg.server.settings (
+    lib.optionalAttrs (cfg.server.tokenFile != null) { server.token_file = tokenPath; }
+  );
+  configFile = settingsFormat.generate "todo-server.toml" settings;
   vFlag = n: lib.optionalString (n > 0) "-${lib.concatStrings (lib.replicate n "v")}";
   serverPort = cfg.server.settings.server.port or 3000;
   verbose = lib.mkOption {
@@ -68,6 +73,16 @@ in
           a relative path would resolve inside the Nix store.
         '';
       };
+      tokenFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/run/agenix/todo-token";
+        description = ''
+          File holding the bearer token for /api and /mcp, e.g. an agenix or
+          sops-nix secret. It can stay root-only. A string, not a Nix path,
+          so the token stays out of the Nix store. null: no auth.
+        '';
+      };
     };
 
     firewallInterfaces = lib.mkOption {
@@ -106,6 +121,9 @@ in
           # Notes it writes stay group-writable for the vault's other users.
           UMask = "0007";
           ReadWritePaths = [ cfg.server.settings.vault.root ];
+        }
+        // lib.optionalAttrs (cfg.server.tokenFile != null) {
+          LoadCredential = "token:${cfg.server.tokenFile}";
         };
       };
 

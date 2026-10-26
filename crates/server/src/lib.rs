@@ -24,18 +24,13 @@ use crate::config::Config;
 ///
 /// # Errors
 ///
-/// Returns an [`Error`] if the config can't be loaded or the server can't bind.
+/// Returns an [`Error`] if the config or token can't be loaded, or the server
+/// can't bind.
 pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
     let config = Config::load(args.config.as_deref())?;
     let state = AppState::open(&config.vault.root, &config.vault.inbox)?;
-    server::start(
-        &config.server.address,
-        config.server.port,
-        state,
-        &config.mcp,
-    )
-    .await?;
+    server::start(&config.server, state, &config.mcp).await?;
     tracing::info!("Server stopped");
     Ok(())
 }
