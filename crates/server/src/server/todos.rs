@@ -34,7 +34,7 @@ async fn one(
     todo.map(Json).ok_or_else(|| ApiError::not_found(&id))
 }
 
-/// `POST /api/todos`: adds a todo to the inbox note. Answers 201.
+/// `POST /api/todos`: adds a todo to the inbox note, or to `note`. Answers 201.
 async fn add(
     State(state): State<AppState>,
     Json(new): Json<NewTodo>,
@@ -75,14 +75,18 @@ impl AppState {
         self.store().todos().cloned().collect()
     }
 
-    /// Adds a todo to the inbox note.
+    /// Adds a todo to the inbox note, or to `new.note`.
     pub(super) fn add_todo(&self, new: NewTodo) -> Result<Todo, ApiError> {
         check(Some(&new.text), Some(&new.tags))?;
         let mut todo = Todo::new(Id(String::new()), new.text.trim(), today());
         todo.priority = new.priority;
         todo.due = new.due;
         todo.tags = new.tags;
-        Ok(self.store().add(todo)?)
+        let mut store = self.store();
+        Ok(match new.note {
+            Some(note) => store.add_to(note, todo)?,
+            None => store.add(todo)?,
+        })
     }
 
     /// Changes the fields that are set in `patch`.
@@ -227,6 +231,34 @@ mod tests {
         let note = std::fs::read_to_string(dir.path().join("todo.md")).expect("note");
         let line = format!("- [ ] buy milk ⏫ ➕ {} #errand ^{}", today(), todo.id.0);
         assert!(note.contains(&line), "{note}");
+    }
+
+    #[tokio::test]
+    async fn add_can_target_another_note() {
+        let (dir, app) = test_app(NOTE);
+        let new = json!({"text": "ship it", "note": "projects/dev.md"});
+        let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let note = std::fs::read_to_string(dir.path().join("projects/dev.md")).expect("note");
+        assert_eq!(
+            note,
+            format!(
+                "- [ ] ship it ➕ {} ^{}\n",
+                today(),
+                body["id"].as_str().unwrap_or_default()
+            )
+        );
+
+        let new = json!({"text": "x", "note": "../outside.md"});
+        let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("../outside.md"),
+            "{body}"
+        );
     }
 
     #[tokio::test]

@@ -24,6 +24,16 @@ Content-Type: application/json
   "tags": ["errand"]
 }
 
+### Add a todo to another note (created if missing)
+# @name add_to_note
+POST {{host}}/api/todos
+Content-Type: application/json
+
+{
+  "text": "Plan the enclosure",
+  "note": "projects/dongle.md"
+}
+
 ### Change some fields; "due": null clears the date
 # @name update
 PATCH {{host}}/api/todos/a1b2c3

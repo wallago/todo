@@ -114,7 +114,9 @@ impl Todos {
     }
 
     /// Adds a todo.
-    #[tool(description = "Add a todo to the inbox note. Returns it with its new id.")]
+    #[tool(
+        description = "Add a todo to the inbox note, or to `note` (created if missing). Returns it with its new id."
+    )]
     async fn add_todo(&self, Parameters(new): Parameters<NewTodo>) -> Answer {
         json(&self.state.add_todo(new).map_err(err)?)
     }
