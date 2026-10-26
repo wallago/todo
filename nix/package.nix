@@ -14,8 +14,6 @@ naersk'.buildPackage {
     ++ [
       "-p"
       "todo-server"
-      # "-p"
-      # "todo-mcp"
     ];
   meta = {
     description = "Just a personal Todo app.";

@@ -11,7 +11,6 @@ let
   configFile = settingsFormat.generate "todo-server.toml" cfg.server.settings;
   vFlag = n: lib.optionalString (n > 0) "-${lib.concatStrings (lib.replicate n "v")}";
   serverPort = cfg.server.settings.server.port or 3000;
-  mcpPort = lib.toInt (lib.last (lib.splitString ":" cfg.mcp.listen));
   verbose = lib.mkOption {
     type = lib.types.ints.between 0 3;
     default = 1;
@@ -33,7 +32,7 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      description = "Package with the todo-server and todo-mcp binaries.";
+      description = "Package with the todo-server binary.";
     };
 
     server = {
@@ -56,6 +55,13 @@ in
             root = "/srv/vault";
             inbox = "todo.md";
           };
+          # Host names MCP clients use for /mcp.
+          mcp.allowed_hosts = [
+            "localhost"
+            "127.0.0.1"
+            "::1"
+            "todo.wallago.xyz"
+          ];
         };
         description = ''
           Written to config.toml. `vault.root` must be absolute:
@@ -64,32 +70,11 @@ in
       };
     };
 
-    mcp = {
-      enable = lib.mkEnableOption "the todo MCP server over HTTP";
-      inherit verbose;
-      listen = lib.mkOption {
-        type = lib.types.str;
-        default = "127.0.0.1:3001";
-        description = "TODO_MCP_LISTEN. Endpoint is /mcp.";
-      };
-      allowedHosts = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
-        example = [ "homelab" ];
-        description = "TODO_MCP_ALLOWED_HOSTS. Loopback is always allowed.";
-      };
-      serverUrl = lib.mkOption {
-        type = lib.types.str;
-        default = "http://127.0.0.1:${toString serverPort}";
-        description = "TODO_SERVER_URL.";
-      };
-    };
-
     firewallInterfaces = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "wg0" ];
-      description = "Open the enabled services' ports on these interfaces only.";
+      description = "Open the server port on these interfaces only.";
     };
   };
 
@@ -126,32 +111,6 @@ in
 
       networking.firewall.interfaces = lib.genAttrs cfg.firewallInterfaces (_: {
         allowedTCPPorts = [ serverPort ];
-      });
-    })
-
-    (lib.mkIf cfg.mcp.enable {
-      systemd.services.todo-mcp = {
-        description = "Todo MCP server";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "network.target" ] ++ lib.optional cfg.server.enable "todo-server.service";
-        wants = lib.optional cfg.server.enable "todo-server.service";
-        environment = {
-          TODO_MCP_TRANSPORT = "http";
-          TODO_MCP_LISTEN = cfg.mcp.listen;
-          TODO_SERVER_URL = cfg.mcp.serverUrl;
-        }
-        // lib.optionalAttrs (cfg.mcp.allowedHosts != [ ]) {
-          TODO_MCP_ALLOWED_HOSTS = lib.concatStringsSep "," cfg.mcp.allowedHosts;
-        };
-        serviceConfig = hardening // {
-          ExecStart = "${lib.getExe' cfg.package "todo-mcp"} ${vFlag cfg.mcp.verbose}";
-          # Holds no data, so no fixed user needed.
-          DynamicUser = true;
-        };
-      };
-
-      networking.firewall.interfaces = lib.genAttrs cfg.firewallInterfaces (_: {
-        allowedTCPPorts = [ mcpPort ];
       });
     })
   ];

@@ -21,6 +21,11 @@ impl ApiError {
     pub(super) fn not_found(id: &str) -> Self {
         Self(StatusCode::NOT_FOUND, format!("no todo with id `{id}`"))
     }
+
+    /// The message, without the status.
+    pub(super) fn message(&self) -> &str {
+        &self.1
+    }
 }
 
 impl From<todo_store::Error> for ApiError {

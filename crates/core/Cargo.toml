@@ -8,9 +8,14 @@ repository   = "https://github.com/wallago/todo"
 edition      = "2024"
 rust-version = "1.88"
 
+[features]
+# JSON schemas for the MCP tools.
+schemars = ["dep:schemars"]
+
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["serde"] }
-serde  = { version = "1.0.229", features = ["derive"] }
+chrono   = { version = "0.4", default-features = false, features = ["serde"] }
+schemars = { version = "1", features = ["chrono04"], optional = true }
+serde    = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

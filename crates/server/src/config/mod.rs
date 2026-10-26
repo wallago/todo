@@ -6,6 +6,8 @@ use serde::Deserialize;
 
 use crate::prelude::*;
 
+/// MCP settings.
+pub(crate) mod mcp;
 /// Server settings.
 pub(crate) mod server;
 /// Vault settings.
@@ -20,6 +22,9 @@ pub(crate) struct Config {
     pub(crate) server: server::ServerConfig,
     /// Vault config.
     pub(crate) vault: vault::VaultConfig,
+    /// MCP config.
+    #[serde(default)]
+    pub(crate) mcp: mcp::McpConfig,
 }
 
 impl Config {
