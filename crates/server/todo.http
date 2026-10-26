@@ -7,6 +7,16 @@ GET {{host}}/health
 GET {{host}}/api/todos
 Accept: application/json
 
+### Todos of one note
+# @name list_note
+GET {{host}}/api/todos?note=projects/dev.md
+Accept: application/json
+
+### Every note in the vault
+# @name notes
+GET {{host}}/api/notes
+Accept: application/json
+
 ### One todo by id (404 if unknown)
 # @name one
 GET {{host}}/api/todos/a1b2c3
@@ -22,6 +32,16 @@ Content-Type: application/json
   "priority": "high",
   "due": "2026-10-30",
   "tags": ["errand"]
+}
+
+### Add a todo to another note (created if missing)
+# @name add_to_note
+POST {{host}}/api/todos
+Content-Type: application/json
+
+{
+  "text": "Plan the enclosure",
+  "note": "projects/dongle.md"
 }
 
 ### Change some fields; "due": null clears the date

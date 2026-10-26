@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::hash::{BuildHasher, RandomState};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use todo_core::{Id, Todo};
 use todo_md::Document;
@@ -26,6 +26,9 @@ pub enum Error {
     /// The change was refused: unknown id, id already taken...
     #[error(transparent)]
     Md(#[from] todo_md::Error),
+    /// The path is not a `.md` note inside the vault.
+    #[error("`{}` is not a note in the vault: give a relative path to a .md file, like `projects/dev.md`", .0.display())]
+    BadNote(PathBuf),
 }
 
 /// Shorthand for the store's results.
@@ -75,6 +78,18 @@ impl Store {
         self.notes.values().flat_map(Document::todos)
     }
 
+    /// Every todo with its note's path, relative to the vault.
+    pub fn todos_by_note(&self) -> impl Iterator<Item = (&Path, &Todo)> {
+        self.notes
+            .iter()
+            .flat_map(|(path, doc)| doc.todos().map(move |todo| (path.as_path(), todo)))
+    }
+
+    /// Every note's path, relative to the vault, todos or not.
+    pub fn notes(&self) -> impl Iterator<Item = &Path> {
+        self.notes.keys().map(PathBuf::as_path)
+    }
+
     /// The todo with this id.
     #[must_use]
     pub fn get(&self, id: &Id) -> Option<&Todo> {
@@ -88,13 +103,22 @@ impl Store {
     ///
     /// [`Error::Md`] if its id is already used, [`Error::Io`] if the inbox
     /// can't be read or written.
-    pub fn add(&mut self, mut todo: Todo) -> Result<Todo> {
+    pub fn add(&mut self, todo: Todo) -> Result<Todo> {
         let inbox = self.inbox.clone();
-        self.reload(&inbox)?;
-        if todo.id.0.is_empty() {
-            todo.id = new_id(&mut self.index.keys().cloned().collect());
-        }
-        self.apply(&inbox, |doc| doc.add(todo.clone()).map(|()| todo))
+        self.insert(&inbox, todo)
+    }
+
+    /// Adds a todo to `note`, a path relative to the vault, creating the
+    /// note if it is missing. Otherwise like [`Store::add`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadNote`] if `note` is not a `.md` file inside the vault or
+    /// is hidden, then as [`Store::add`].
+    pub fn add_to(&mut self, note: impl AsRef<Path>, todo: Todo) -> Result<Todo> {
+        let note = note.as_ref();
+        check_note(note)?;
+        self.insert(note, todo)
     }
 
     /// Changes a todo and saves its note. Returns it as saved.
@@ -144,6 +168,15 @@ impl Store {
         Ok(())
     }
 
+    /// Adds a todo to `path`, which the caller trusts.
+    fn insert(&mut self, path: &Path, mut todo: Todo) -> Result<Todo> {
+        self.reload(path)?;
+        if todo.id.0.is_empty() {
+            todo.id = new_id(&mut self.index.keys().cloned().collect());
+        }
+        self.apply(path, |doc| doc.add(todo.clone()).map(|()| todo))
+    }
+
     /// Re-reads the note holding `id` and returns its path.
     fn locate(&mut self, id: &Id) -> Result<PathBuf> {
         let not_found = || Error::Md(todo_md::Error::NotFound(id.clone()));
@@ -163,7 +196,7 @@ impl Store {
         path: &Path,
         change: impl FnOnce(&mut Document) -> std::result::Result<T, todo_md::Error>,
     ) -> Result<T> {
-        // A missing inbox starts as an empty note.
+        // A missing note starts empty.
         let mut doc = self
             .notes
             .get(path)
@@ -243,6 +276,20 @@ fn find_notes(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Refuses paths that leave the vault, hidden ones (`.obsidian`), and
+/// files that are not `.md`, the same notes [`find_notes`] would skip.
+fn check_note(note: &Path) -> Result<()> {
+    let inside = note.components().all(|part| match part {
+        Component::Normal(name) => !name.to_string_lossy().starts_with('.'),
+        _ => false,
+    });
+    if inside && note.extension().is_some_and(|ext| ext == "md") {
+        Ok(())
+    } else {
+        Err(Error::BadNote(note.to_owned()))
+    }
 }
 
 /// Writes a note to a temp file then renames it over the old one, so a crash
@@ -329,6 +376,13 @@ mod tests {
         let store = Store::open(dir.path(), "todo.md")?;
         let ids: Vec<&str> = store.todos().map(|t| t.id.0.as_str()).collect();
         assert_eq!(ids, ["bbbbbb", "aaaaaa"]);
+        let notes: Vec<&Path> = store.notes().collect();
+        assert_eq!(notes, [Path::new("projects/dev.md"), Path::new("todo.md")]);
+        let (note, todo) = store.todos_by_note().next().expect("a todo");
+        assert_eq!(
+            (note, todo.text.as_str()),
+            (Path::new("projects/dev.md"), "b")
+        );
         assert_eq!(store.get(&id("bbbbbb")).map(|t| t.text.as_str()), Some("b"));
         Ok(())
     }
@@ -380,6 +434,46 @@ mod tests {
             format!("- [ ] buy milk ➕ 2026-10-25 ^{}\n", todo.id.0)
         );
         assert_eq!(store.get(&todo.id), Some(&todo));
+        Ok(())
+    }
+
+    #[test]
+    fn add_to_another_note_creates_it() -> Result<()> {
+        let dir = vault(&[("todo.md", "- [ ] x ^aaaaaa\n")]);
+        let mut store = Store::open(dir.path(), "todo.md")?;
+        let todo = store.add_to(
+            "projects/dev.md",
+            Todo::new(Id(String::new()), "ship it", today()),
+        )?;
+        assert_eq!(
+            read(&dir, "projects/dev.md"),
+            format!("- [ ] ship it ➕ 2026-10-25 ^{}\n", todo.id.0)
+        );
+        assert_eq!(read(&dir, "todo.md"), "- [ ] x ^aaaaaa\n");
+        assert_eq!(store.get(&todo.id), Some(&todo));
+        Ok(())
+    }
+
+    #[test]
+    fn add_to_refuses_notes_outside_the_vault() -> Result<()> {
+        let dir = vault(&[("todo.md", "")]);
+        let mut store = Store::open(dir.path(), "todo.md")?;
+        for note in [
+            "../out.md",
+            "/tmp/out.md",
+            ".obsidian/x.md",
+            "notes.txt",
+            "",
+        ] {
+            assert!(
+                matches!(
+                    store.add_to(note, Todo::new(Id(String::new()), "x", today())),
+                    Err(Error::BadNote(_))
+                ),
+                "{note}"
+            );
+        }
+        assert_eq!(store.todos().count(), 0);
         Ok(())
     }
 

@@ -41,6 +41,18 @@ pub struct NewTodo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Note to add it to, relative to the vault, like `projects/dev.md`.
+    /// Created if missing. The inbox note if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Query of `GET /api/todos`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TodoQuery {
+    /// Only todos in this note, like `travel/japan.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Body of `PATCH /api/todos/{id}`. Fields left out stay as they are.
