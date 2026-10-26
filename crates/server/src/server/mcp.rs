@@ -34,6 +34,7 @@ type Answer = Result<String, String>;
 
 /// Arguments of `list_todos`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(transform = todo_core::nullable_any_of)]
 pub(super) struct ListArgs {
     /// Also list done and cancelled todos.
     #[serde(default)]
@@ -68,6 +69,7 @@ pub(super) struct IdArgs {
 
 /// Arguments of `update_todo`.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(transform = todo_core::nullable_any_of)]
 pub(super) struct UpdateArgs {
     /// The todo's id, e.g. `k3x9a2`.
     id: Id,
@@ -220,6 +222,27 @@ mod tests {
         assert_eq!(args.id, Id("a1".into()));
         assert_eq!(args.patch.text.as_deref(), Some("x"));
         assert_eq!(args.patch.due, Some(None));
+    }
+
+    /// The tool's input schema, as rmcp builds it.
+    fn schema<T: JsonSchema>() -> serde_json::Value {
+        let generator = schemars::generate::SchemaSettings::draft2020_12().into_generator();
+        generator.into_root_schema_for::<T>().to_value()
+    }
+
+    #[test]
+    fn nullable_fields_use_any_of() {
+        for schema in [
+            schema::<ListArgs>(),
+            schema::<NewTodo>(),
+            schema::<UpdateArgs>(),
+        ] {
+            let text = schema.to_string();
+            assert!(!text.contains(r#""type":["#), "{text}");
+        }
+        let due = &schema::<UpdateArgs>()["properties"]["due"];
+        assert_eq!(due["anyOf"][0]["format"], "date", "{due}");
+        assert_eq!(due["anyOf"][1]["type"], "null", "{due}");
     }
 
     /// POSTs a JSON-RPC message to `/mcp` with this `Host`.
