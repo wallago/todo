@@ -22,7 +22,7 @@ pub(super) fn routes() -> Router<AppState> {
 
 /// `GET /api/todos`: every todo.
 async fn list(State(state): State<AppState>) -> Json<Vec<Todo>> {
-    Json(state.store().todos().cloned().collect())
+    Json(state.list_todos())
 }
 
 /// `GET /api/todos/{id}`: one todo, or 404.
@@ -39,13 +39,7 @@ async fn add(
     State(state): State<AppState>,
     Json(new): Json<NewTodo>,
 ) -> Result<(StatusCode, Json<Todo>), ApiError> {
-    check(Some(&new.text), Some(&new.tags))?;
-    let mut todo = Todo::new(Id(String::new()), new.text.trim(), today());
-    todo.priority = new.priority;
-    todo.due = new.due;
-    todo.tags = new.tags;
-    let todo = state.store().add(todo)?;
-    Ok((StatusCode::CREATED, Json(todo)))
+    Ok((StatusCode::CREATED, Json(state.add_todo(new)?)))
 }
 
 /// `PATCH /api/todos/{id}`: changes the fields that are sent.
@@ -54,12 +48,7 @@ async fn update(
     Path(id): Path<String>,
     Json(patch): Json<TodoPatch>,
 ) -> Result<Json<Todo>, ApiError> {
-    check(patch.text.as_deref(), patch.tags.as_deref())?;
-    let today = today();
-    let todo = state
-        .store()
-        .update(&Id(id), |todo| apply(patch, todo, today))?;
-    Ok(Json(todo))
+    Ok(Json(state.update_todo(&Id(id), patch)?))
 }
 
 /// `POST /api/todos/{id}/complete`: ticks it. Safe to retry.
@@ -67,9 +56,7 @@ async fn complete(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Todo>, ApiError> {
-    let today = today();
-    let todo = state.store().update(&Id(id), |todo| todo.complete(today))?;
-    Ok(Json(todo))
+    Ok(Json(state.complete_todo(&Id(id))?))
 }
 
 /// `DELETE /api/todos/{id}`: removes it and its line. Answers 204.
@@ -77,8 +64,45 @@ async fn remove(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state.store().remove(&Id(id))?;
+    state.remove_todo(&Id(id))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// What the routes and the MCP tools both do.
+impl AppState {
+    /// Every todo.
+    pub(super) fn list_todos(&self) -> Vec<Todo> {
+        self.store().todos().cloned().collect()
+    }
+
+    /// Adds a todo to the inbox note.
+    pub(super) fn add_todo(&self, new: NewTodo) -> Result<Todo, ApiError> {
+        check(Some(&new.text), Some(&new.tags))?;
+        let mut todo = Todo::new(Id(String::new()), new.text.trim(), today());
+        todo.priority = new.priority;
+        todo.due = new.due;
+        todo.tags = new.tags;
+        Ok(self.store().add(todo)?)
+    }
+
+    /// Changes the fields that are set in `patch`.
+    pub(super) fn update_todo(&self, id: &Id, patch: TodoPatch) -> Result<Todo, ApiError> {
+        check(patch.text.as_deref(), patch.tags.as_deref())?;
+        let today = today();
+        Ok(self.store().update(id, |todo| apply(patch, todo, today))?)
+    }
+
+    /// Ticks a todo.
+    pub(super) fn complete_todo(&self, id: &Id) -> Result<Todo, ApiError> {
+        let today = today();
+        Ok(self.store().update(id, |todo| todo.complete(today))?)
+    }
+
+    /// Removes a todo and its line.
+    pub(super) fn remove_todo(&self, id: &Id) -> Result<(), ApiError> {
+        self.store().remove(id)?;
+        Ok(())
+    }
 }
 
 /// Today, in the server's time zone.

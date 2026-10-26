@@ -27,6 +27,8 @@ pub use http::{Client, Error, Result};
 
 /// Body of `POST /api/todos`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(transform = todo_core::nullable_any_of))]
 pub struct NewTodo {
     /// What to do.
     pub text: String,
@@ -43,6 +45,8 @@ pub struct NewTodo {
 
 /// Body of `PATCH /api/todos/{id}`. Fields left out stay as they are.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(transform = todo_core::nullable_any_of))]
 pub struct TodoPatch {
     /// New text.
     #[serde(default, skip_serializing_if = "Option::is_none")]

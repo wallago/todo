@@ -7,3 +7,7 @@ port = 3000
 root = "../../vault/"
 # Note that new todos go to, relative to root.
 inbox = "todo.md"
+
+[mcp]
+# `Host` headers accepted on /mcp. Add your public hostname to serve remote clients.
+allowed_hosts = ["localhost", "127.0.0.1", "::1"]

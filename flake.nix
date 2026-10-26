@@ -67,6 +67,8 @@
             devTools = with pkgs; [
               rust-analyzer
               claude
+              # npx, for `just mcp-inspect`
+              nodejs
             ];
           in
           {

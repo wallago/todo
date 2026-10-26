@@ -2,10 +2,12 @@
 
 use axum::{Router, http::StatusCode, routing::get, serve};
 
-use crate::{app::AppState, prelude::*};
+use crate::{app::AppState, config::mcp::McpConfig, prelude::*};
 
 /// Errors answered as JSON.
 mod api_error;
+/// `/mcp`.
+mod mcp;
 /// `/api/todos`.
 mod todos;
 
@@ -15,18 +17,24 @@ async fn health() -> StatusCode {
 }
 
 /// Global server routes.
-fn routes(state: AppState) -> Router {
+fn routes(state: AppState, mcp_config: &McpConfig) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(todos::routes())
+        .nest_service("/mcp", mcp::service(state.clone(), mcp_config))
         .with_state(state)
 }
 
 /// Start web services. Returns on Ctrl-C or SIGTERM (systemd stop).
-pub(super) async fn start(address: &str, port: u16, state: AppState) -> Result<()> {
+pub(super) async fn start(
+    address: &str,
+    port: u16,
+    state: AppState,
+    mcp_config: &McpConfig,
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(format!("{address}:{port}")).await?;
     tracing::info!("Server running on {}", listener.local_addr()?);
-    serve(listener, routes(state))
+    serve(listener, routes(state, mcp_config))
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
@@ -59,7 +67,7 @@ fn test_app(note: &str) -> (tempfile::TempDir, Router) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("todo.md"), note).expect("write note");
     let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
-    (dir, routes(AppState::new(store)))
+    (dir, routes(AppState::new(store), &McpConfig::default()))
 }
 
 #[cfg(test)]

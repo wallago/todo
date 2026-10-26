@@ -8,11 +8,13 @@ use serde::{Deserialize, Serialize};
 /// Survives edits to the text, so the TUI, MCP and desk display can all
 /// point at the same task.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(transparent)]
 pub struct Id(pub String);
 
 /// Checkbox state: the character between `[` and `]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     /// `[ ]`
@@ -61,6 +63,7 @@ impl Status {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
     /// `⏬`
@@ -95,6 +98,7 @@ impl Priority {
 
 /// One task.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Todo {
     /// Stable id (`^k3x9a2`).
     pub id: Id,
@@ -158,6 +162,60 @@ impl Todo {
     }
 }
 
+/// Rewrites `"type": [T, "null"]` (how schemars spells `Option<T>`) as
+/// `anyOf: [{"type": T}, {"type": "null"}]`, which more MCP clients accept.
+///
+/// Use as `#[schemars(transform = todo_core::nullable_any_of)]`.
+#[cfg(feature = "schemars")]
+pub fn nullable_any_of(schema: &mut schemars::Schema) {
+    use serde_json::{Map, Value, json};
+
+    /// Keys that describe the field, so they stay outside the `anyOf`.
+    const META: [&str; 7] = [
+        "description",
+        "title",
+        "default",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    ];
+
+    schemars::transform::transform_subschemas(&mut nullable_any_of, schema);
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(Value::Array(types)) = object.get("type") else {
+        return;
+    };
+    let null = json!("null");
+    let [first, second] = types.as_slice() else {
+        return;
+    };
+    let inner = match (first == &null, second == &null) {
+        (false, true) => first.clone(),
+        (true, false) => second.clone(),
+        _ => return,
+    };
+    object.remove("type");
+    let mut branch = Map::new();
+    branch.insert("type".to_owned(), inner);
+    let moved: Vec<String> = object
+        .keys()
+        .filter(|key| !META.contains(&key.as_str()) && !key.starts_with('$'))
+        .cloned()
+        .collect();
+    for key in moved {
+        if let Some(value) = object.remove(&key) {
+            branch.insert(key, value);
+        }
+    }
+    object.insert(
+        "anyOf".to_owned(),
+        json!([Value::Object(branch), {"type": "null"}]),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -192,7 +250,12 @@ mod tests {
 
     #[test]
     fn status_char_round_trips() {
-        for status in [Status::Todo, Status::InProgress, Status::Done, Status::Cancelled] {
+        for status in [
+            Status::Todo,
+            Status::InProgress,
+            Status::Done,
+            Status::Cancelled,
+        ] {
             assert_eq!(Status::from_char(status.as_char()), status);
         }
     }

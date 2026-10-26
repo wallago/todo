@@ -9,10 +9,9 @@ todo/
 │   ├── core/             # Todo struct, state machine, no I/O
 │   ├── md/               # parser + serializer (md <-> core)
 │   ├── store/            # file watching, read/write vault, index
-│   ├── server/           # axum HTTP API — sole owner of the vault
-│   ├── client/           # wire types + request fns (shared by tui/mcp)
-│   ├── tui/              # ratatui client
-│   └── mcp/              # MCP server (rmcp crate)
+│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the vault
+│   ├── client/           # wire types + request fns (shared by tui/desk)
+│   └── tui/              # ratatui client
 └── vault/                # test fixtures, sample .md
 ```
 
@@ -20,7 +19,7 @@ todo/
 vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
                                            ^
                                            +---HTTP--> desk display
-                                           +--stdio--> mcp (for Claude)
+                                           +---HTTP /mcp--> Claude
 ```
 
 ### Keys
@@ -37,10 +36,10 @@ vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
   Expose maybe 5 tools: `list_todos`, `add_todo`, `complete_todo`, `update_todo`, `search`.
   Resist exposing a generic "edit file" tool — the whole point is that the parser enforces format validity.
 - `server` is the only process that touches the vault.
-  `store` is server-internal; `tui` and `mcp` never open a `.md` file.
+  `store` is server-internal; the MCP tools live in the server and call the same code as the routes.
   Two independent readers/writers means torn reads mid-write and lost updates when Obsidian saves at the same time.
 - `client` holds the wire format once.
-  Both `tui` and `mcp` depend on it, so the API types can't drift between consumers.
+  The server and `tui` both depend on it, so the API types can't drift between consumers.
 - The file watcher must distinguish the server's own writes from external edits.
   Otherwise every write triggers a reload that can clobber in-flight state.
   Record path + mtime/hash just written, ignore the next matching event.
@@ -74,3 +73,23 @@ vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
 4. `tui` — the thing used daily
 5. `mcp`
 6. desk display endpoint
+
+## MCP
+
+The server serves MCP (Streamable HTTP) at `/mcp`, next to `/api`.
+Tools: `list_todos`, `add_todo`, `update_todo`, `complete_todo`, `delete_todo`.
+They run the same code as the routes, so there is no second process or port.
+
+`[mcp] allowed_hosts` lists the `Host` names clients may use (loopback by default).
+Add the public hostname, or requests get a 403:
+
+```toml
+[mcp]
+allowed_hosts = ["localhost", "127.0.0.1", "::1", "todo.wallago.xyz"]
+```
+
+```sh
+claude mcp add --transport http todo https://todo.wallago.xyz/mcp
+```
+
+The endpoint has no auth yet, like the API.
