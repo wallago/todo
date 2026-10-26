@@ -152,7 +152,7 @@ impl ServerHandler for Todos {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Hugo's todo list, stored as Obsidian Tasks lines in a vault. \
+                "Personal todo list, stored as Obsidian Tasks lines in a vault. \
                  Call list_todos first to find ids.",
             )
     }
