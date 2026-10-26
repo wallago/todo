@@ -43,6 +43,8 @@ pub(super) struct ListArgs {
     query: Option<String>,
     /// Only todos with this tag, without the `#`.
     tag: Option<String>,
+    /// Only todos in this note, like `travel/japan.md`. See `list_notes`.
+    note: Option<String>,
 }
 
 impl ListArgs {
@@ -58,6 +60,16 @@ impl ListArgs {
                 .as_ref()
                 .is_none_or(|tag| todo.tags.iter().any(|t| t == tag.trim_start_matches('#')))
     }
+}
+
+/// A todo and the note it is in, as `list_todos` shows it.
+#[derive(Debug, Serialize)]
+struct Listed {
+    /// Path of the note, relative to the vault.
+    note: String,
+    /// The todo.
+    #[serde(flatten)]
+    todo: Todo,
 }
 
 /// Arguments of the tools that take only an id.
@@ -99,18 +111,28 @@ impl Todos {
 
     /// Lists todos.
     #[tool(
-        description = "List todos. Open ones only unless `all` is true; filter by text with `query` or by `tag`.",
+        description = "List todos with the note each is in. Open ones only unless `all` is true; filter by text with `query`, by `tag`, or by `note`.",
         annotations(read_only_hint = true)
     )]
     async fn list_todos(&self, Parameters(args): Parameters<ListArgs>) -> Answer {
         json(
             &self
                 .state
-                .list_todos()
+                .list_todos(args.note.as_deref())
                 .into_iter()
-                .filter(|t| args.keeps(t))
+                .filter(|(_, todo)| args.keeps(todo))
+                .map(|(note, todo)| Listed { note, todo })
                 .collect::<Vec<_>>(),
         )
+    }
+
+    /// Lists notes.
+    #[tool(
+        description = "List the vault's notes, as paths like `travel/japan.md`. Each note is usually one subject.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_notes(&self) -> Answer {
+        json(&self.state.list_notes())
     }
 
     /// Adds a todo.
@@ -157,7 +179,8 @@ impl ServerHandler for Todos {
             ))
             .with_instructions(
                 "Personal todo list, stored as Obsidian Tasks lines in a vault. \
-                 Call list_todos first to find ids.",
+                 Each note is usually one subject (a project, a trip...): list_notes \
+                 shows them. Call list_todos first to find ids.",
             )
     }
 }
@@ -215,6 +238,26 @@ mod tests {
         assert!(!args(r#"{"query": "bread"}"#).keeps(&open));
         assert!(args(r##"{"tag": "#errand"}"##).keeps(&open));
         assert!(!args(r#"{"tag": "work"}"#).keeps(&open));
+    }
+
+    #[tokio::test]
+    async fn list_shows_and_filters_notes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("todo.md"), "- [ ] a ^aaaaaa\n").expect("write");
+        std::fs::write(dir.path().join("travel.md"), "- [ ] b ^bbbbbb\n").expect("write");
+        let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
+        let todos = Todos::new(AppState::new(store));
+
+        let notes = todos.list_notes().await.expect("notes");
+        assert!(notes.contains(r#""travel.md""#), "{notes}");
+        let args = ListArgs {
+            note: Some("travel.md".into()),
+            ..ListArgs::default()
+        };
+        let listed = todos.list_todos(Parameters(args)).await.expect("todos");
+        assert!(listed.contains(r#""note": "travel.md""#), "{listed}");
+        assert!(listed.contains(r#""id": "bbbbbb""#), "{listed}");
+        assert!(!listed.contains("aaaaaa"), "{listed}");
     }
 
     #[test]

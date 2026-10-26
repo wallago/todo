@@ -3,7 +3,7 @@
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
-use crate::{ErrorBody, Id, NewTodo, Todo, TodoPatch};
+use crate::{ErrorBody, Id, NewTodo, Todo, TodoPatch, TodoQuery};
 
 /// What can go wrong when calling the server.
 #[derive(Debug, thiserror::Error)]
@@ -58,12 +58,26 @@ impl Client {
         send(self.request(Method::GET, None)).await
     }
 
+    /// The todos of one note, like `travel/japan.md`.
+    pub async fn list_note(&self, note: &str) -> Result<Vec<Todo>> {
+        let query = TodoQuery {
+            note: Some(note.to_owned()),
+        };
+        send(self.request(Method::GET, None).query(&query)).await
+    }
+
+    /// Every note's path, relative to the vault.
+    pub async fn notes(&self) -> Result<Vec<String>> {
+        send(self.http.get(format!("{}/api/notes", self.base))).await
+    }
+
     /// One todo.
     pub async fn get(&self, id: &Id) -> Result<Todo> {
         send(self.request(Method::GET, Some(id))).await
     }
 
-    /// Adds a todo to the inbox note. Returns it with its new id.
+    /// Adds a todo to the inbox note, or to `new.note`. Returns it with its
+    /// new id.
     pub async fn add(&self, new: &NewTodo) -> Result<Todo> {
         send(self.request(Method::POST, None).json(new)).await
     }

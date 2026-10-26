@@ -7,6 +7,16 @@ GET {{host}}/health
 GET {{host}}/api/todos
 Accept: application/json
 
+### Todos of one note
+# @name list_note
+GET {{host}}/api/todos?note=projects/dev.md
+Accept: application/json
+
+### Every note in the vault
+# @name notes
+GET {{host}}/api/notes
+Accept: application/json
+
 ### One todo by id (404 if unknown)
 # @name one
 GET {{host}}/api/todos/a1b2c3

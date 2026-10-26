@@ -47,6 +47,14 @@ pub struct NewTodo {
     pub note: Option<String>,
 }
 
+/// Query of `GET /api/todos`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TodoQuery {
+    /// Only todos in this note, like `travel/japan.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// Body of `PATCH /api/todos/{id}`. Fields left out stay as they are.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

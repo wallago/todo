@@ -78,6 +78,18 @@ impl Store {
         self.notes.values().flat_map(Document::todos)
     }
 
+    /// Every todo with its note's path, relative to the vault.
+    pub fn todos_by_note(&self) -> impl Iterator<Item = (&Path, &Todo)> {
+        self.notes
+            .iter()
+            .flat_map(|(path, doc)| doc.todos().map(move |todo| (path.as_path(), todo)))
+    }
+
+    /// Every note's path, relative to the vault, todos or not.
+    pub fn notes(&self) -> impl Iterator<Item = &Path> {
+        self.notes.keys().map(PathBuf::as_path)
+    }
+
     /// The todo with this id.
     #[must_use]
     pub fn get(&self, id: &Id) -> Option<&Todo> {
@@ -364,6 +376,13 @@ mod tests {
         let store = Store::open(dir.path(), "todo.md")?;
         let ids: Vec<&str> = store.todos().map(|t| t.id.0.as_str()).collect();
         assert_eq!(ids, ["bbbbbb", "aaaaaa"]);
+        let notes: Vec<&Path> = store.notes().collect();
+        assert_eq!(notes, [Path::new("projects/dev.md"), Path::new("todo.md")]);
+        let (note, todo) = store.todos_by_note().next().expect("a todo");
+        assert_eq!(
+            (note, todo.text.as_str()),
+            (Path::new("projects/dev.md"), "b")
+        );
         assert_eq!(store.get(&id("bbbbbb")).map(|t| t.text.as_str()), Some("b"));
         Ok(())
     }

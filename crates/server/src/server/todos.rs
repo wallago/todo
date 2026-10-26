@@ -1,13 +1,13 @@
-//! Todo routes: `/api/todos`.
+//! Todo routes: `/api/todos` and `/api/notes`.
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
 };
 use chrono::NaiveDate;
-use todo_client::{Id, NewTodo, Status, Todo, TodoPatch};
+use todo_client::{Id, NewTodo, Status, Todo, TodoPatch, TodoQuery};
 
 use super::api_error::ApiError;
 use crate::app::AppState;
@@ -18,11 +18,18 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/api/todos", get(list).post(add))
         .route("/api/todos/{id}", get(one).patch(update).delete(remove))
         .route("/api/todos/{id}/complete", post(complete))
+        .route("/api/notes", get(notes))
 }
 
-/// `GET /api/todos`: every todo.
-async fn list(State(state): State<AppState>) -> Json<Vec<Todo>> {
-    Json(state.list_todos())
+/// `GET /api/todos`: every todo, or only those of `?note=`.
+async fn list(State(state): State<AppState>, Query(query): Query<TodoQuery>) -> Json<Vec<Todo>> {
+    let todos = state.list_todos(query.note.as_deref());
+    Json(todos.into_iter().map(|(_, todo)| todo).collect())
+}
+
+/// `GET /api/notes`: every note's path, relative to the vault.
+async fn notes(State(state): State<AppState>) -> Json<Vec<String>> {
+    Json(state.list_notes())
 }
 
 /// `GET /api/todos/{id}`: one todo, or 404.
@@ -70,9 +77,21 @@ async fn remove(
 
 /// What the routes and the MCP tools both do.
 impl AppState {
-    /// Every todo.
-    pub(super) fn list_todos(&self) -> Vec<Todo> {
-        self.store().todos().cloned().collect()
+    /// Every todo with its note's path, or only those of `note`.
+    pub(super) fn list_todos(&self, note: Option<&str>) -> Vec<(String, Todo)> {
+        self.store()
+            .todos_by_note()
+            .filter(|(path, _)| note.is_none_or(|note| *path == std::path::Path::new(note)))
+            .map(|(path, todo)| (path.to_string_lossy().into_owned(), todo.clone()))
+            .collect()
+    }
+
+    /// Every note's path, relative to the vault.
+    pub(super) fn list_notes(&self) -> Vec<String> {
+        self.store()
+            .notes()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
     }
 
     /// Adds a todo to the inbox note, or to `new.note`.
@@ -249,6 +268,12 @@ mod tests {
             )
         );
 
+        let (_, body) = send(&app, Method::GET, "/api/notes", None).await;
+        assert_eq!(body, json!(["projects/dev.md", "todo.md"]));
+        let (_, body) = send(&app, Method::GET, "/api/todos?note=projects/dev.md", None).await;
+        assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+        assert_eq!(body[0]["text"], "ship it");
+
         let new = json!({"text": "x", "note": "../outside.md"});
         let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -334,9 +359,15 @@ mod tests {
         assert_eq!(client.list().await?.len(), 2);
         let new = NewTodo {
             text: "buy milk".into(),
+            note: Some("errands/shop.md".into()),
             ..NewTodo::default()
         };
         let todo = client.add(&new).await?;
+        assert_eq!(client.notes().await?, ["errands/shop.md", "todo.md"]);
+        assert_eq!(
+            client.list_note("errands/shop.md").await?,
+            std::slice::from_ref(&todo)
+        );
         assert_eq!(client.get(&todo.id).await?, todo);
         let patch = TodoPatch {
             due: Some(None),
