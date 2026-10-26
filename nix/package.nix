@@ -1,12 +1,12 @@
 {
-  pkgs,
   lib,
   naersk',
   src,
   release ? true,
 }:
 naersk'.buildPackage {
-  name = "todo";
+  pname = "todo";
+  version = "0.1.0";
   inherit src release;
   cargoBuildOptions =
     opts:

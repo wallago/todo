@@ -53,7 +53,7 @@
             buildApp =
               { release }:
               pkgs.callPackage ./nix/package.nix {
-                inherit naersk' release pkgs;
+                inherit naersk' release;
                 src = ./.;
               };
 
