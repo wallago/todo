@@ -61,7 +61,7 @@ in
             inbox = "todo.md";
           };
           # Host names MCP clients use for /mcp.
-          mcp.allowed_hosts = [
+          mcp.allowedHosts = [
             "localhost"
             "127.0.0.1"
             "::1"
@@ -114,17 +114,19 @@ in
         description = "Todo server";
         wantedBy = [ "multi-user.target" ];
         after = [ "network.target" ];
-        serviceConfig = hardening // {
-          ExecStart = "${lib.getExe' cfg.package "todo-server"} --config ${configFile} ${vFlag cfg.server.verbose}";
-          User = cfg.server.user;
-          Group = cfg.server.group;
-          # Notes it writes stay group-writable for the vault's other users.
-          UMask = "0007";
-          ReadWritePaths = [ cfg.server.settings.vault.root ];
-        }
-        // lib.optionalAttrs (cfg.server.tokenFile != null) {
-          LoadCredential = "token:${cfg.server.tokenFile}";
-        };
+        serviceConfig =
+          hardening
+          // {
+            ExecStart = "${lib.getExe' cfg.package "todo-server"} --config ${configFile} ${vFlag cfg.server.verbose}";
+            User = cfg.server.user;
+            Group = cfg.server.group;
+            # Notes it writes stay group-writable for the vault's other users.
+            UMask = "0007";
+            ReadWritePaths = [ cfg.server.settings.vault.root ];
+          }
+          // lib.optionalAttrs (cfg.server.tokenFile != null) {
+            LoadCredential = "token:${cfg.server.tokenFile}";
+          };
       };
 
       networking.firewall.interfaces = lib.genAttrs cfg.firewallInterfaces (_: {
