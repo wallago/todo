@@ -17,6 +17,14 @@ impl ApiError {
         Self(StatusCode::BAD_REQUEST, message.into())
     }
 
+    /// 401: no token, or the wrong one.
+    pub(super) fn unauthorized() -> Self {
+        Self(
+            StatusCode::UNAUTHORIZED,
+            "missing or wrong bearer token".to_owned(),
+        )
+    }
+
     /// 404: no todo with this id.
     pub(super) fn not_found(id: &str) -> Self {
         Self(StatusCode::NOT_FOUND, format!("no todo with id `{id}`"))

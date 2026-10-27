@@ -11,3 +11,7 @@ target/
 
 # ── Local development environment ────────────────────────────
 .direnv/
+
+# ── Secrets ──────────────────────────────────────────────────
+# kulala: put the prod token here, e.g. {"prod": {"token": "..."}}
+http-client.private.env.json

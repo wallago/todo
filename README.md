@@ -88,8 +88,16 @@ Add the public hostname, or requests get a 403:
 allowed_hosts = ["localhost", "127.0.0.1", "::1", "todo.wallago.xyz"]
 ```
 
+## Auth
+
+Set `[server] token_file` to a file holding a token (agenix, sops...).
+Then `/api` and `/mcp` answer 401 unless the request sends `Authorization: Bearer <token>`.
+`/health` stays open.
+Without `token_file` there is no auth: keep the server on localhost.
+
 ```sh
-claude mcp add --transport http todo https://todo.wallago.xyz/mcp
+claude mcp add --transport http todo https://todo.wallago.xyz/mcp \
+  --header "Authorization: Bearer $(cat /path/to/token)"
 ```
 
-The endpoint has no auth yet, like the API.
+In Rust: `todo_client::Client::new(url).with_token(&token)`.

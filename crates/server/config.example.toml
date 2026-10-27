@@ -1,6 +1,9 @@
 [server]
 address = "127.0.0.1"
 port = 3000
+# File holding the bearer token for /api and /mcp, relative to this file.
+# Unset: no auth, anyone who can reach the server can use them.
+# token_file = "token"
 
 [vault]
 # Relative to this file.
