@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct McpConfig {
     /// `Host` headers accepted on `/mcp`; anything else gets a 403.
+    #[serde(alias = "allowedHosts")]
     pub(crate) allowed_hosts: Vec<String>,
 }
 
