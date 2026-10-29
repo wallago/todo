@@ -23,19 +23,19 @@ use crate::config::Config;
 ///
 /// # Errors
 ///
-/// Returns an [`Error`] if the run fa
+/// Returns an [`Error`] if the config is invalid or the terminal fails.
 pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
     let config = Config::load(args.config.as_deref())?;
     tracing::debug!("Loaded {config:?}");
-
+    let client = config.client()?;
 
     // Runs until Ctrl-C or until any component stops.
     tokio::select! {
         result = tokio::signal::ctrl_c() => {
             tracing::info!("Interrupted: {:?}", result);
         },
-        result = tui::run() => {
+        result = tui::run(&client) => {
             tracing::info!("TUI stopped: {:?}", result);
         },
     }

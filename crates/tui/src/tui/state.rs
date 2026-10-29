@@ -4,54 +4,25 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     widgets::ListState,
 };
+use todo_client::Todo;
 
-/// Which side owns the keyboard.
+/// Which pane owns the keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Focus {
-    /// Page navigation on the left.
+    /// Notes on the left.
     #[default]
-    Sidebar,
-    /// The current page.
-    Page,
+    Notes,
+    /// Todos of the selected note.
+    Todos,
 }
 
-/// Page shown on the right, picked in the sidebar.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Page {
-    /// A list to move through.
-    #[default]
-    Home,
-    /// Name, version and description of the crate.
-    About,
-}
-
-impl Page {
-    /// Every page, in sidebar order.
-    pub(super) const ALL: [Self; 2] = [Self::Home, Self::About];
-
-    /// Label in the sidebar.
-    pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::Home => "home",
-            Self::About => "about",
-        }
-    }
-
-    /// Position in [`Self::ALL`].
-    pub(super) fn index(self) -> usize {
-        Self::ALL.iter().position(|&page| page == self).unwrap_or(0)
-    }
-
-    /// The page after (or before) this one, or `self` past either end.
-    fn step(self, forward: bool) -> Self {
-        let at = self.index();
-        let to = if forward {
-            at.saturating_add(1)
-        } else {
-            at.saturating_sub(1)
-        };
-        Self::ALL.get(to).copied().unwrap_or(self)
-    }
+/// Server calls a key asks for; the event loop runs them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Action {
+    /// Reload the notes, then the selected note's todos.
+    Refresh,
+    /// Reload the selected note's todos.
+    LoadTodos,
 }
 
 /// Application state.
@@ -59,14 +30,18 @@ impl Page {
 pub(super) struct State {
     /// Cleared to leave the event loop.
     pub(super) running: bool,
-    /// Which side owns the keyboard.
+    /// Which pane owns the keyboard.
     pub(super) focus: Focus,
-    /// Page shown and selected in the sidebar.
-    pub(super) page: Page,
-    /// Rows of the home page's list.
-    pub(super) items: Vec<&'static str>,
-    /// Selected row of [`Self::items`].
-    pub(super) list: ListState,
+    /// Note paths from the server, like `projects/todo.md`.
+    pub(super) notes: Vec<String>,
+    /// Selected row of [`Self::notes`].
+    pub(super) note_list: ListState,
+    /// Todos of the selected note.
+    pub(super) todos: Vec<Todo>,
+    /// Selected row of [`Self::todos`].
+    pub(super) todo_list: ListState,
+    /// Last server error, shown until the next successful call.
+    pub(super) error: Option<String>,
 }
 
 impl Default for State {
@@ -74,16 +49,47 @@ impl Default for State {
         Self {
             running: true,
             focus: Focus::default(),
-            page: Page::default(),
-            items: vec!["first item", "second item", "third item"],
-            list: ListState::default().with_selected(Some(0)),
+            notes: Vec::new(),
+            note_list: ListState::default(),
+            todos: Vec::new(),
+            todo_list: ListState::default(),
+            error: None,
         }
     }
 }
 
 impl State {
-    /// Applies a key press.
-    pub(super) fn on_key(&mut self, key: KeyEvent) {
+    /// The selected note, if any.
+    pub(super) fn note(&self) -> Option<&str> {
+        self.note_list
+            .selected()
+            .and_then(|at| self.notes.get(at))
+            .map(String::as_str)
+    }
+
+    /// Replaces the notes, keeping the selected one if it's still there.
+    pub(super) fn set_notes(&mut self, notes: Vec<String>) {
+        let kept = self
+            .note()
+            .and_then(|note| notes.iter().position(|n| n == note));
+        self.note_list
+            .select(kept.or_else(|| (!notes.is_empty()).then_some(0)));
+        self.notes = notes;
+    }
+
+    /// Replaces the todos, keeping the cursor row in range.
+    pub(super) fn set_todos(&mut self, todos: Vec<Todo>) {
+        let at = self.todo_list.selected().unwrap_or(0);
+        self.todo_list.select(if todos.is_empty() {
+            None
+        } else {
+            Some(at.min(todos.len() - 1))
+        });
+        self.todos = todos;
+    }
+
+    /// Applies a key press, returning the server call it needs, if any.
+    pub(super) fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
         let ctrl_c =
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
         let (up, down) = (
@@ -94,30 +100,59 @@ impl State {
             // Raw mode turns Ctrl-C into a key, so it never reaches the signal handler.
             _ if ctrl_c => self.running = false,
             (_, KeyCode::Char('q')) => self.running = false,
-            (Focus::Sidebar, _) if up || down => self.page = self.page.step(down),
-            (Focus::Sidebar, KeyCode::Tab | KeyCode::Enter) => self.focus = Focus::Page,
-            (Focus::Page, KeyCode::Tab | KeyCode::Esc) => self.focus = Focus::Sidebar,
-            (Focus::Page, _) if (up || down) && self.page == Page::Home => {
-                let at = self.list.selected().unwrap_or(0);
-                let to = if down {
-                    at.saturating_add(1)
-                } else {
-                    at.saturating_sub(1)
-                };
-                self.list
-                    .select(Some(to.min(self.items.len().saturating_sub(1))));
+            (_, KeyCode::Char('r')) => return Some(Action::Refresh),
+            (Focus::Notes, _) if up || down => {
+                let before = self.note_list.selected();
+                step(&mut self.note_list, self.notes.len(), down);
+                if self.note_list.selected() != before {
+                    // A new note starts at its first todo.
+                    self.todo_list.select(None);
+                    return Some(Action::LoadTodos);
+                }
             }
+            (Focus::Notes, KeyCode::Tab | KeyCode::Enter | KeyCode::Char('l')) => {
+                self.focus = Focus::Todos;
+            }
+            (Focus::Todos, KeyCode::Tab | KeyCode::Esc | KeyCode::Char('h')) => {
+                self.focus = Focus::Notes;
+            }
+            (Focus::Todos, _) if up || down => step(&mut self.todo_list, self.todos.len(), down),
             _ => {}
         }
+        None
     }
 
     /// Keys that do something right now, as `(keys, what they do)`.
     pub(super) fn key_bindings(&self) -> &'static [(&'static str, &'static str)] {
         match self.focus {
-            Focus::Sidebar => &[("↑↓", "page"), ("tab", "enter"), ("q", "quit")],
-            Focus::Page => &[("↑↓", "move"), ("tab", "back"), ("q", "quit")],
+            Focus::Notes => &[
+                ("↑↓", "note"),
+                ("tab", "todos"),
+                ("r", "refresh"),
+                ("q", "quit"),
+            ],
+            Focus::Todos => &[
+                ("↑↓", "move"),
+                ("tab", "notes"),
+                ("r", "refresh"),
+                ("q", "quit"),
+            ],
         }
     }
+}
+
+/// Moves `list` one row, without wrapping, in a list of `len` rows.
+fn step(list: &mut ListState, len: usize, down: bool) {
+    if len == 0 {
+        return;
+    }
+    let at = list.selected().unwrap_or(0);
+    let to = if down {
+        at.saturating_add(1)
+    } else {
+        at.saturating_sub(1)
+    };
+    list.select(Some(to.min(len - 1)));
 }
 
 #[cfg(test)]
@@ -132,6 +167,13 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    /// A state with two notes, the first selected.
+    fn with_notes() -> State {
+        let mut state = State::default();
+        state.set_notes(vec!["a.md".into(), "b.md".into()]);
+        state
+    }
+
     #[rstest]
     #[case::q(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))]
     #[case::ctrl_c(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))]
@@ -142,27 +184,40 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_picks_the_page_without_wrapping() {
-        let mut state = State::default();
-        state.on_key(press(KeyCode::Down));
-        assert_eq!(state.page, Page::About);
-        state.on_key(press(KeyCode::Down));
-        assert_eq!(state.page, Page::About);
-        state.on_key(press(KeyCode::Up));
-        assert_eq!(state.page, Page::Home);
+    fn r_refreshes() {
+        assert_eq!(
+            State::default().on_key(press(KeyCode::Char('r'))),
+            Some(Action::Refresh)
+        );
     }
 
     #[test]
-    fn page_list_stops_at_the_last_item() {
-        let mut state = State::default();
+    fn moving_to_another_note_loads_its_todos() {
+        let mut state = with_notes();
+        assert_eq!(state.note(), Some("a.md"));
+        assert_eq!(state.on_key(press(KeyCode::Down)), Some(Action::LoadTodos));
+        assert_eq!(state.note(), Some("b.md"));
+        // Past the end: nothing changes, nothing to load.
+        assert_eq!(state.on_key(press(KeyCode::Down)), None);
+        assert_eq!(state.note(), Some("b.md"));
+    }
+
+    #[test]
+    fn refreshed_notes_keep_the_selection() {
+        let mut state = with_notes();
+        state.on_key(press(KeyCode::Down));
+        state.set_notes(vec!["0.md".into(), "a.md".into(), "b.md".into()]);
+        assert_eq!(state.note(), Some("b.md"));
+        state.set_notes(vec!["c.md".into()]);
+        assert_eq!(state.note(), Some("c.md"));
+    }
+
+    #[test]
+    fn tab_switches_panes() {
+        let mut state = with_notes();
         state.on_key(press(KeyCode::Tab));
-        assert_eq!(state.focus, Focus::Page);
-        for _ in 0..5 {
-            state.on_key(press(KeyCode::Down));
-        }
-        assert_eq!(state.list.selected(), Some(state.items.len() - 1));
-        assert_eq!(state.page, Page::Home);
+        assert_eq!(state.focus, Focus::Todos);
         state.on_key(press(KeyCode::Esc));
-        assert_eq!(state.focus, Focus::Sidebar);
+        assert_eq!(state.focus, Focus::Notes);
     }
 }
