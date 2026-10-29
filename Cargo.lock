@@ -2765,6 +2765,7 @@ name = "todo-tui"
 version = "0.1.0"
 dependencies = [
  "better-panic",
+ "chrono",
  "clap",
  "dirs",
  "pretty_assertions",
@@ -2772,6 +2773,7 @@ dependencies = [
  "rstest",
  "serde",
  "thiserror 2.0.21",
+ "todo-client",
  "tokio",
  "toml",
  "tracing",
