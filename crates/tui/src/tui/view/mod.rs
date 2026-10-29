@@ -1,20 +1,30 @@
-//! Widget renderer.
+//! Widget renderer: the frame, sidebar and key bindings here, one file per page.
 
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Gauge, HighlightSpacing, List, Padding, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Gauge, HighlightSpacing, List, ListState, Padding, Paragraph, Wrap,
+    },
 };
-use todo_client::Todo;
 
 use super::{
-    state::{Focus, State},
-    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, HIGHLIGHT, PRIMARY, SECONDARY, UNACCENT},
+    state::{Focus, Page, State},
+    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, PRIMARY, SECONDARY, UNACCENT},
 };
 
-/// Renders the whole screen: frame, notes, todos and key bindings.
+/// The about page.
+mod about;
+/// The manager page.
+mod manager;
+/// The note finder popup.
+mod picker;
+/// The stats page.
+mod stats;
+
+/// Renders the whole screen: frame, sidebar, page, popup and key bindings.
 pub(super) fn render(state: &mut State, frame: &mut Frame) {
     let title = Line::from(vec![
         Span::raw(" "),
@@ -29,12 +39,24 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
         .bg(BACKGROUND)
         .title(title);
     frame.render_widget(block, frame.area());
-    let [sidebar, page] = Layout::horizontal([Constraint::Length(32), Constraint::Min(0)])
+    let [sidebar, page] = Layout::horizontal([Constraint::Length(24), Constraint::Min(0)])
         .margin(2)
         .spacing(2)
         .areas(frame.area());
     render_sidebar(state, frame, sidebar);
-    render_todos(state, frame, page);
+    let focused = state.focus == Focus::Page;
+    if let Some(error) = &state.error {
+        render_error(error, frame, page);
+    } else {
+        match state.page {
+            Page::Manager => manager::render(&mut state.manager, focused, frame, page),
+            Page::Stats => stats::render(&state.stats, focused, frame, page),
+            Page::About => about::render(focused, frame, page),
+        }
+    }
+    if let Some(picker) = &mut state.picker {
+        picker::render(picker, frame, page);
+    }
     render_key_bindings(state, frame, frame.area());
 }
 
@@ -53,7 +75,10 @@ fn pane(title: &str, focused: bool) -> Block<'_> {
 }
 
 /// A list styled like praline's: muted rows, the selected one lit with a bar.
-fn list<'a>(items: impl IntoIterator<Item = &'a str>, block: Block<'a>) -> List<'a> {
+fn list<'a, T: Into<ratatui::widgets::ListItem<'a>>>(
+    items: impl IntoIterator<Item = T>,
+    block: Block<'a>,
+) -> List<'a> {
     List::new(items)
         .block(block)
         .style(SECONDARY)
@@ -62,89 +87,57 @@ fn list<'a>(items: impl IntoIterator<Item = &'a str>, block: Block<'a>) -> List<
         .highlight_spacing(HighlightSpacing::Always)
 }
 
-/// Notes on top, how much of the selected one is done below.
-fn render_sidebar(state: &mut State, frame: &mut Frame, rect: Rect) {
-    let [notes, summary] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(rect);
-    let names = list(
-        state.notes.iter().map(|note| note_name(note)),
-        pane("notes", state.focus == Focus::Notes),
-    );
-    frame.render_stateful_widget(names, notes, &mut state.note_list);
-
-    let block = pane("summary", false);
-    let inner = block.inner(summary);
-    frame.render_widget(block, summary);
-    let [header, content, _, bar] = Layout::vertical([Constraint::Length(1); 4]).areas(inner);
-    let done = state
-        .todos
-        .iter()
-        .filter(|todo| todo.status.is_closed())
-        .count();
-    let len = state.todos.len();
-    frame.render_widget(Line::from(Span::styled("TODOS", SECONDARY)), header);
-    frame.render_widget(
-        Line::from(Span::styled(format!("{done}/{len} done"), PRIMARY)).bold(),
-        content,
-    );
-    #[expect(clippy::cast_precision_loss, reason = "a list fits in an f64")]
-    let ratio = if len == 0 {
-        0.0
-    } else {
-        done as f64 / len as f64
-    };
-    let gauge = Gauge::default()
-        .gauge_style(Style::new().fg(ACCENT).bg(ACCENT_BIS))
-        .ratio(ratio.clamp(0.0, 1.0))
-        .label("")
-        .use_unicode(true);
-    frame.render_widget(gauge, bar);
-}
-
 /// A note path without its `.md`, like `projects/todo`.
 fn note_name(note: &str) -> &str {
     note.strip_suffix(".md").unwrap_or(note)
 }
 
-/// The selected note's todos, or the last server error.
-fn render_todos(state: &mut State, frame: &mut Frame, rect: Rect) {
-    let title = state.note().map_or("todos", note_name).to_owned();
-    let block = pane(&title, state.focus == Focus::Todos);
-    if let Some(error) = &state.error {
-        let text = Paragraph::new(Line::from(Span::styled(error.as_str(), ERROR)))
-            .wrap(Wrap { trim: true })
-            .block(block);
-        frame.render_widget(text, rect);
-        return;
-    }
-    let rows = state.todos.iter().map(todo_row);
-    let todos = List::new(rows)
-        .block(block)
-        .style(SECONDARY)
-        .highlight_style(Style::new().bg(ACCENT_BIS).bold())
-        .highlight_symbol(Span::styled("▌ ", ACCENT))
-        .highlight_spacing(HighlightSpacing::Always);
-    frame.render_stateful_widget(todos, rect, &mut state.todo_list);
+/// Page navigation on top, how much of the open note is done below.
+fn render_sidebar(state: &State, frame: &mut Frame, rect: Rect) {
+    let [navigate, summary] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(rect);
+    let pages = list(
+        Page::ALL.iter().map(|page| page.name()),
+        pane("navigate", state.focus == Focus::Sidebar),
+    );
+    let mut selected = ListState::default().with_selected(Some(state.page.index()));
+    frame.render_stateful_widget(pages, navigate, &mut selected);
+
+    let block = pane("summary", false);
+    let inner = block.inner(summary);
+    frame.render_widget(block, summary);
+    let [header, content, _, bar] = Layout::vertical([Constraint::Length(1); 4]).areas(inner);
+    let (done, len) = state.manager.counts();
+    frame.render_widget(Line::from(Span::styled("TODOS", SECONDARY)), header);
+    frame.render_widget(
+        Line::from(Span::styled(format!("{done}/{len} done"), PRIMARY)).bold(),
+        content,
+    );
+    let gauge = Gauge::default()
+        .gauge_style(Style::new().fg(ACCENT).bg(ACCENT_BIS))
+        .ratio(ratio(done, len))
+        .label("")
+        .use_unicode(true);
+    frame.render_widget(gauge, bar);
 }
 
-/// `[ ] text ⏫ 2026-11-02`, dimmed once closed.
-fn todo_row(todo: &Todo) -> Line<'_> {
-    let text = if todo.status.is_closed() {
-        SECONDARY
+/// `done / total`, 0 for an empty note.
+fn ratio(done: usize, total: usize) -> f64 {
+    #[expect(clippy::cast_precision_loss, reason = "a note's todos fit in an f64")]
+    let ratio = if total == 0 {
+        0.0
     } else {
-        PRIMARY
+        done as f64 / total as f64
     };
-    let mut spans = vec![
-        Span::styled(format!("[{}] ", todo.status.as_char()), ACCENT),
-        Span::styled(todo.text.as_str(), text),
-    ];
-    if let Some(emoji) = todo.priority.emoji() {
-        spans.push(Span::raw(format!(" {emoji}")));
-    }
-    if let Some(due) = todo.due {
-        spans.push(Span::styled(format!(" {due}"), HIGHLIGHT));
-    }
-    Line::from(spans)
+    ratio.clamp(0.0, 1.0)
+}
+
+/// The last server error, in place of the page.
+fn render_error(error: &str, frame: &mut Frame, rect: Rect) {
+    let text = Paragraph::new(Line::from(Span::styled(error, ERROR)))
+        .wrap(Wrap { trim: true })
+        .block(pane("error", false));
+    frame.render_widget(text, rect);
 }
 
 /// The keys that work right now, centred on the bottom border.
@@ -170,10 +163,16 @@ fn render_key_bindings(state: &State, frame: &mut Frame, rect: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend, buffer::Cell};
-    use todo_client::{Id, Status};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::Cell,
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    };
+    use todo_client::{Id, Status, Todo};
 
     use super::*;
+    use crate::tui::state::NoteStats;
 
     /// Draws `state` on an 80×24 screen and returns its text, row after row.
     fn screen(state: &mut State) -> String {
@@ -198,22 +197,64 @@ mod tests {
         todo
     }
 
-    #[test]
-    fn shows_notes_todos_and_keys() {
+    /// A state with two notes, the first open with two todos.
+    fn with_todos() -> State {
         let mut state = State::default();
         state.set_notes(vec!["projects/todo.md".into(), "travel.md".into()]);
-        state.set_todos(vec![
+        state.manager.set_todos(vec![
             todo("a", "write the tui", Status::Todo),
             todo("b", "auth", Status::Done),
         ]);
-        let screen = screen(&mut state);
+        state
+    }
+
+    #[test]
+    fn manager_shows_the_note_its_todos_and_keys() {
+        let screen = screen(&mut with_todos());
         assert!(screen.contains(env!("CARGO_PKG_NAME")));
+        assert!(screen.contains("manager"));
         assert!(screen.contains("projects/todo"));
         assert!(!screen.contains("todo.md"));
         assert!(screen.contains("[ ] write the tui"));
         assert!(screen.contains("[x] auth"));
         assert!(screen.contains("1/2 done"));
         assert!(screen.contains("quit"));
+    }
+
+    #[test]
+    fn picker_pops_up_over_the_manager() {
+        let mut state = with_todos();
+        state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        let screen = screen(&mut state);
+        assert!(screen.contains("find note"));
+        assert!(screen.contains("> t"));
+        assert!(screen.contains("travel"));
+    }
+
+    #[test]
+    fn stats_shows_each_note() {
+        let mut state = State {
+            page: Page::Stats,
+            stats: vec![NoteStats {
+                note: "travel.md".into(),
+                done: 1,
+                total: 4,
+            }],
+            ..State::default()
+        };
+        let screen = screen(&mut state);
+        assert!(screen.contains("travel"));
+        assert!(screen.contains("1/4"));
+    }
+
+    #[test]
+    fn about_shows_the_version() {
+        let mut state = State {
+            page: Page::About,
+            ..State::default()
+        };
+        assert!(screen(&mut state).contains(env!("CARGO_PKG_VERSION")));
     }
 
     #[test]

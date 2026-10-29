@@ -13,7 +13,7 @@ mod theme;
 /// Widget renderer.
 mod view;
 
-use state::{Action, State};
+use state::{Action, NoteStats, Page, State};
 
 /// Puts the terminal back however [`run`] ends: quit, error, or another
 /// component stopping first and dropping it mid-loop.
@@ -58,22 +58,39 @@ pub(super) async fn run(client: &Client) -> Result<()> {
 /// Runs `action` against the server. A failure is shown, not returned,
 /// so a server that's down doesn't close the app.
 async fn apply(client: &Client, state: &mut State, action: Action) {
-    let result = async {
-        if action == Action::Refresh {
-            state.set_notes(client.notes().await?);
-        }
-        let todos = match state.note() {
-            Some(note) => client.list_note(note).await?,
-            None => Vec::new(),
-        };
-        state.set_todos(todos);
-        Ok::<_, todo_client::Error>(())
-    }
-    .await;
+    let result = load(client, state, action).await;
     state.error = result.err().map(|error| with_causes(&error));
     if let Some(error) = &state.error {
         tracing::warn!("{action:?} failed: {error}");
     }
+}
+
+/// The server calls behind [`apply`].
+async fn load(client: &Client, state: &mut State, action: Action) -> todo_client::Result<()> {
+    if action == Action::Refresh {
+        state.set_notes(client.notes().await?);
+    }
+    if action == Action::LoadStats || (action == Action::Refresh && state.page == Page::Stats) {
+        let mut rows = Vec::with_capacity(state.notes.len());
+        for note in &state.notes {
+            let todos = client.list_note(note).await?;
+            let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
+            rows.push(NoteStats {
+                note: note.clone(),
+                done,
+                total: todos.len(),
+            });
+        }
+        state.stats = rows;
+    }
+    if action != Action::LoadStats {
+        let todos = match &state.manager.note {
+            Some(note) => client.list_note(note).await?,
+            None => Vec::new(),
+        };
+        state.manager.set_todos(todos);
+    }
+    Ok(())
 }
 
 /// `error: cause: cause...`, since reqwest hides the useful part in the sources.
