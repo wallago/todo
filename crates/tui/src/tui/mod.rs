@@ -70,10 +70,22 @@ async fn apply(client: &Client, state: &mut State, action: Action) {
         Ok::<_, todo_client::Error>(())
     }
     .await;
-    state.error = result.err().map(|error| error.to_string());
+    state.error = result.err().map(|error| with_causes(&error));
     if let Some(error) = &state.error {
         tracing::warn!("{action:?} failed: {error}");
     }
+}
+
+/// `error: cause: cause...`, since reqwest hides the useful part in the sources.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 /// Reads terminal events on a thread of their own, since `event::read`
