@@ -12,6 +12,6 @@ macro_rules! version {
 mod tests {
     #[test]
     fn version_names_the_calling_crate() {
-        assert!(crate::version!().starts_with("canary-core "));
+        assert!(crate::version!().starts_with("todo-tui "));
     }
 }

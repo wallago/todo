@@ -1,4 +1,4 @@
-//! TUI todo app.
+//! Terminal interface for todo app.
 
 /// Main application.
 pub mod app;
@@ -12,14 +12,14 @@ pub mod error;
 pub mod help;
 /// Common types that can be glob-imported for convenience.
 pub mod prelude;
-/// User interface.
-mod ui;
+/// Terminal user interface.
+mod tui;
 
 use prelude::*;
 
 use crate::config::Config;
 
-/// Runs `tui`.
+/// Runs `todo-tui`.
 ///
 /// # Errors
 ///
@@ -27,17 +27,34 @@ use crate::config::Config;
 pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
     let config = Config::load(args.config.as_deref())?;
-    ui::run(config, app)
+    tracing::debug!("Loaded {config:?}");
+
+
+    // Runs until Ctrl-C or until any component stops.
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            tracing::info!("Interrupted: {:?}", result);
+        },
+        result = tui::run() => {
+            tracing::info!("TUI stopped: {:?}", result);
+        },
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
+    use std::path::Path;
 
     use super::*;
 
     #[test]
-    fn run_succeeds() {
-        assert_eq!(run(Args::default()).is_ok(), true);
+    fn example_config_loads() -> Result<()> {
+        // Only written when an option adds settings.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.toml");
+        if path.exists() {
+            Config::from_file(&path)?;
+        }
+        Ok(())
     }
 }
