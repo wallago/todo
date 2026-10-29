@@ -15,3 +15,8 @@ target/
 # ── Secrets ──────────────────────────────────────────────────
 # kulala: put the prod token here, e.g. {"prod": {"token": "..."}}
 http-client.private.env.json
+
+# ── Dev ──────────────────────────────────────────────────
+crates/tui/config.dev.toml
+crates/tui/token.dev
+crates/server/http-client.env.json
