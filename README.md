@@ -101,3 +101,25 @@ claude mcp add --transport http todo https://todo.wallago.xyz/mcp \
 ```
 
 In Rust: `todo_client::Client::new(url).with_token(&token)`.
+
+### Read-only token (phone widgets)
+
+`GET /api/agenda` lists open todos due today or overdue, overdue first.
+It answers JSON (`date`, `overdue`, `today`, `text`, `todos`), or with `?format=text` just the lines:
+
+```text
+⚠ Pay rent (2d late)
+• Call the bank
+```
+
+Widgets like KWGT can't set headers, so `[server] read_token_file` adds a second token
+that `/api/agenda` also takes as `?token=`. It opens nothing else, so a leaked widget can't
+change a todo. The main token stays header-only. Use HTTPS: the URL ends up in proxy logs.
+
+```toml
+[server]
+token_file = "token"
+read_token_file = "read-token"
+```
+
+NixOS: `services.todo.server.readTokenFile`.
