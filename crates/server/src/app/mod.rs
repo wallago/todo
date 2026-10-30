@@ -7,6 +7,9 @@ use todo_store::Store;
 
 use crate::prelude::*;
 
+/// Reloads the vault when it changes on disk.
+mod watch;
+
 /// State shared by every route.
 #[derive(Clone, Debug)]
 pub(crate) struct AppState {

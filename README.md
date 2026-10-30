@@ -40,9 +40,8 @@ vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
   Two independent readers/writers means torn reads mid-write and lost updates when Obsidian saves at the same time.
 - `client` holds the wire format once.
   The server and `tui` both depend on it, so the API types can't drift between consumers.
-- The file watcher must distinguish the server's own writes from external edits.
-  Otherwise every write triggers a reload that can clobber in-flight state.
-  Record path + mtime/hash just written, ignore the next matching event.
+- The file watcher reloads the whole vault once it has been quiet for 500 ms, so sync bursts cost one reload.
+  The server's own writes wake it too, which is harmless: the store keeps no state beyond the files, and every write re-reads its note first.
 - Incoming Syncthing/Obsidian Sync changes are just external edits.
   Same code path as editing the vault in Obsidian on another device.
 
