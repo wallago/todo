@@ -16,8 +16,8 @@
       ...
     }@inputs:
     {
-      nixosModules.default = import ./nix/nixos-module.nix self;
-      homeManagerModules.default = import ./nix/hm-module.nix self;
+      nixosModules.server = import ./nix/nixos-module.nix self;
+      homeManagerModules.tui = import ./nix/hm-module.nix self;
     }
     # ── Then merge the per-system outputs onto it ──
     //
