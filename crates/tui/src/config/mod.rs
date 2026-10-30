@@ -31,6 +31,31 @@ pub(crate) struct Keys {
     pub(crate) right: char,
 }
 
+impl Keys {
+    /// Keys the app already uses, which a movement key can't take.
+    const TAKEN: [char; 3] = ['q', 'r', '/'];
+
+    /// Refuses a key used twice, or one the app already uses.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the clashing key.
+    fn check(self) -> Result<()> {
+        let all = [self.up, self.down, self.left, self.right];
+        for (i, key) in all.iter().enumerate() {
+            if Self::TAKEN.contains(key) {
+                return Err(Error::Config(format!(
+                    "[keys]: `{key}` is already used by the app"
+                )));
+            }
+            if all[..i].contains(key) {
+                return Err(Error::Config(format!("[keys]: `{key}` is set twice")));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Default for Keys {
     fn default() -> Self {
         Self {
@@ -93,6 +118,10 @@ impl Config {
         // Deserialize content in TOML format
         let mut config: Self = toml::from_str(&raw)
             .map_err(|error| Error::Config(format!("{}: {error}", path.display())))?;
+        config
+            .keys
+            .check()
+            .map_err(|error| Error::Config(format!("{}: {error}", path.display())))?;
         // Relative paths are relative to the config file, not the cwd.
         if let Some(dir) = path.parent() {
             config.server.token_file = config.server.token_file.map(|file| dir.join(file));
@@ -117,5 +146,46 @@ impl Config {
             return Err(Error::Config(format!("{}: token is empty", path.display())));
         }
         Ok(client.with_token(token))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
+
+    use super::*;
+
+    /// Parses `toml` and runs the same checks as [`Config::from_file`].
+    fn parse(toml: &str) -> Result<Config> {
+        let config: Config =
+            toml::from_str(toml).map_err(|error| Error::Config(error.to_string()))?;
+        config.keys.check()?;
+        Ok(config)
+    }
+
+    #[test]
+    fn keys_default_to_vim() -> Result<()> {
+        assert_eq!(parse("")?.keys, Keys::default());
+        Ok(())
+    }
+
+    #[test]
+    fn keys_can_be_partly_set() -> Result<()> {
+        let keys = parse("[keys]\nup = \"i\"\ndown = \"e\"\n")?.keys;
+        assert_eq!((keys.up, keys.down, keys.left), ('i', 'e', 'h'));
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::two_letters("[keys]\nup = \"ii\"")]
+    #[case::empty("[keys]\nup = \"\"")]
+    #[case::unknown_key("[keys]\njump = \"x\"")]
+    #[case::twice("[keys]\nup = \"e\"\ndown = \"e\"")]
+    #[case::clashes_with_default("[keys]\nup = \"j\"")]
+    #[case::taken_by_quit("[keys]\nup = \"q\"")]
+    #[case::taken_by_finder("[keys]\nleft = \"/\"")]
+    fn bad_keys_are_refused(#[case] toml: &str) {
+        assert!(parse(toml).is_err(), "accepted: {toml}");
     }
 }
