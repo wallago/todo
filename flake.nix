@@ -17,6 +17,7 @@
     }@inputs:
     {
       nixosModules.default = import ./nix/nixos-module.nix self;
+      homeManagerModules.default = import ./nix/hm-module.nix self;
     }
     # ── Then merge the per-system outputs onto it ──
     //
@@ -51,9 +52,9 @@
 
             # ── Build helper ──────────────────────────────────────────
             buildApp =
-              { release }:
+              { crate, release }:
               pkgs.callPackage ./nix/package.nix {
-                inherit naersk' release;
+                inherit naersk' release crate;
                 src = ./.;
               };
 
@@ -73,14 +74,28 @@
           in
           {
             # ── Packages ──────────────────────────────────────────────
-            packages = rec {
-              "todo" = buildApp { release = true; };
-              "todo-debug" = buildApp { release = false; };
-              default = todo;
+            packages = {
+              server = buildApp {
+                crate = "todo-server";
+                release = true;
+              };
+              "server-debug" = buildApp {
+                crate = "todo-server";
+                release = false;
+              };
+              tui = buildApp {
+                crate = "todo-tui";
+                release = true;
+              };
+              "tui-debug" = buildApp {
+                crate = "todo-tui";
+                release = false;
+              };
             };
 
             # ── Checks (nix flake check) ─────────────────────────────
-            checks.check = self.packages.${system}."todo-debug";
+            checks.server = self.packages.${system}.server-debug;
+            checks.tui = self.packages.${system}.tui-debug;
 
             # ── Dev Shell (nix develop) ──────────────────────────────
             devShells.default =

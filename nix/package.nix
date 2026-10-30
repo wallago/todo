@@ -2,6 +2,7 @@
   lib,
   naersk',
   src,
+  crate,
   release ? true,
 }:
 naersk'.buildPackage {
@@ -13,7 +14,7 @@ naersk'.buildPackage {
     opts
     ++ [
       "-p"
-      "todo-server"
+      crate
     ];
   meta = {
     description = "Just a personal Todo app.";

@@ -36,12 +36,12 @@ in
   options.services.todo = {
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.server;
       description = "Package with the todo-server binary.";
     };
 
     server = {
-      enable = lib.mkEnableOption "the todo server";
+      enable = lib.mkEnableOption "todo server";
       inherit verbose;
       user = lib.mkOption {
         type = lib.types.str;
