@@ -61,7 +61,7 @@ in
             inbox = "todo.md";
           };
           # Host names MCP clients use for /mcp.
-          mcp.allowedHosts = [
+          mcp.allowed_hosts = [
             "localhost"
             "127.0.0.1"
             "::1"

@@ -91,6 +91,7 @@
                 crate = "todo-tui";
                 release = false;
               };
+              default = self.packages.${system}.server;
             };
 
             # ── Checks (nix flake check) ─────────────────────────────
