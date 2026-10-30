@@ -28,14 +28,14 @@ pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
     let config = Config::load(args.config.as_deref())?;
     tracing::debug!("Loaded {config:?}");
-    let client = config.client()?;
+    let client = config.server.client()?;
 
     // Runs until Ctrl-C or until any component stops.
     tokio::select! {
         result = tokio::signal::ctrl_c() => {
             tracing::info!("Interrupted: {:?}", result);
         },
-        result = tui::run(&client) => {
+        result = tui::run(&client, config.keys) => {
             tracing::info!("TUI stopped: {:?}", result);
         },
     }
