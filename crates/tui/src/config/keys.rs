@@ -21,7 +21,7 @@ pub(crate) struct Keys {
 
 impl Keys {
     /// Keys the app already uses, which a movement key can't take.
-    const TAKEN: [char; 3] = ['q', 'r', '/'];
+    const TAKEN: [char; 6] = ['q', 'r', '/', 'a', 'c', 'd'];
 
     /// Refuses a key used twice, or one the app already uses.
     ///
@@ -93,6 +93,7 @@ mod tests {
     #[case::clashes_with_default("[keys]\nup = \"j\"")]
     #[case::taken_by_quit("[keys]\nup = \"q\"")]
     #[case::taken_by_finder("[keys]\nleft = \"/\"")]
+    #[case::taken_by_add("[keys]\nright = \"a\"")]
     fn bad_keys_are_refused(#[case] toml: &str) {
         assert!(parse(toml).is_err(), "accepted: {toml}");
     }

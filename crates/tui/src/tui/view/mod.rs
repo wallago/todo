@@ -21,6 +21,8 @@ mod about;
 mod manager;
 /// The note finder popup.
 mod picker;
+/// The add, change and delete popup.
+mod prompt;
 /// The stats page.
 mod stats;
 
@@ -56,6 +58,9 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
     }
     if let Some(picker) = &mut state.picker {
         picker::render(picker, frame, page);
+    }
+    if let Some(prompt) = &state.prompt {
+        prompt::render(prompt, frame, page);
     }
     render_key_bindings(state, frame, frame.area());
 }
@@ -230,6 +235,28 @@ mod tests {
         assert!(screen.contains("find note"));
         assert!(screen.contains("> t"));
         assert!(screen.contains("travel"));
+    }
+
+    #[test]
+    fn prompt_pops_up_with_the_typed_text() {
+        let mut state = with_todos();
+        state.focus = Focus::Page;
+        state.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let screen = screen(&mut state);
+        assert!(screen.contains("new todo"));
+        assert!(screen.contains("> x"));
+        assert!(screen.contains("save"));
+    }
+
+    #[test]
+    fn picker_offers_a_new_note_when_nothing_matches() {
+        let mut state = with_todos();
+        state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in "zz/new".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert!(screen(&mut state).contains("+ new note zz/new"));
     }
 
     #[test]

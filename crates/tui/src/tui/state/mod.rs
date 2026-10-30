@@ -2,15 +2,21 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use todo_client::Id;
+
 use crate::config::Keys;
 
 /// The manager page: one note's todos.
 mod manager;
 /// The note finder popup.
 mod picker;
+/// The add, change and delete popup.
+mod prompt;
 
 pub(super) use manager::Manager;
 pub(super) use picker::Picker;
+use prompt::Outcome;
+pub(super) use prompt::{Ask, Prompt};
 
 /// Which side owns the keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,7 +71,7 @@ impl Page {
 }
 
 /// Server calls a key asks for; the event loop runs them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     /// Reload the notes, then what the current page shows.
     Refresh,
@@ -75,6 +81,12 @@ pub(super) enum Action {
     LoadStats,
     /// Tick the selected todo, or reopen it if it's closed.
     Toggle,
+    /// Add a todo with this text to the manager's note.
+    Add(String),
+    /// Set this todo's text.
+    Change(Id, String),
+    /// Delete this todo.
+    Delete(Id),
 }
 
 /// Done and total todos of one note.
@@ -103,6 +115,8 @@ pub(super) struct State {
     pub(super) manager: Manager,
     /// The note finder, while open.
     pub(super) picker: Option<Picker>,
+    /// The add, change or delete popup, while open.
+    pub(super) prompt: Option<Prompt>,
     /// The stats page, one row per note.
     pub(super) stats: Vec<NoteStats>,
     /// Last server error, shown until the next successful call.
@@ -120,6 +134,7 @@ impl Default for State {
             notes: Vec::new(),
             manager: Manager::default(),
             picker: None,
+            prompt: None,
             stats: Vec::new(),
             error: None,
             keys: Keys::default(),
@@ -128,15 +143,10 @@ impl Default for State {
 }
 
 impl State {
-    /// Replaces the notes. The manager keeps its note if it still exists,
-    /// else opens the first one.
+    /// Replaces the notes. The manager keeps its note, even a new one with
+    /// no file yet; with none open, it opens the first one.
     pub(super) fn set_notes(&mut self, notes: Vec<String>) {
-        let kept = self
-            .manager
-            .note
-            .as_ref()
-            .is_some_and(|note| notes.contains(note));
-        if !kept {
+        if self.manager.note.is_none() {
             self.manager.open(notes.first().cloned());
         }
         self.notes = notes;
@@ -159,9 +169,16 @@ impl State {
                     None
                 }
                 KeyCode::Enter => {
-                    let note = picker.selected().map(str::to_owned);
+                    let note = picker.choice();
                     self.picker = None;
                     note.map(|note| {
+                        // A new note has no file until its first todo: ask for it.
+                        if !self.notes.contains(&note) {
+                            self.prompt = Some(Prompt {
+                                ask: Ask::Add,
+                                input: String::new(),
+                            });
+                        }
                         self.manager.open(Some(note));
                         Action::LoadTodos
                     })
@@ -170,6 +187,23 @@ impl State {
                     picker.on_key(key, self.keys);
                     None
                 }
+            };
+        }
+        if let Some(prompt) = &mut self.prompt {
+            return match prompt.on_key(key.code) {
+                Outcome::Open => None,
+                Outcome::Cancel => {
+                    self.prompt = None;
+                    None
+                }
+                Outcome::Submit => self.prompt.take().map(|prompt| {
+                    let text = prompt.input.trim().to_owned();
+                    match prompt.ask {
+                        Ask::Add => Action::Add(text),
+                        Ask::Change(id) => Action::Change(id, text),
+                        Ask::Delete(id) => Action::Delete(id),
+                    }
+                }),
             };
         }
         let keys = self.keys;
@@ -199,6 +233,25 @@ impl State {
             (Focus::Page, Page::Manager, KeyCode::Enter) if self.manager.selected().is_some() => {
                 return Some(Action::Toggle);
             }
+            (_, Page::Manager, KeyCode::Char('a')) if self.manager.note.is_some() => {
+                self.prompt = Some(Prompt {
+                    ask: Ask::Add,
+                    input: String::new(),
+                });
+            }
+            (_, Page::Manager, KeyCode::Char(c @ ('c' | 'd'))) => {
+                if let Some(todo) = self.manager.selected() {
+                    let id = todo.id.clone();
+                    self.prompt = Some(Prompt {
+                        ask: if c == 'c' {
+                            Ask::Change(id)
+                        } else {
+                            Ask::Delete(id)
+                        },
+                        input: todo.text.clone(),
+                    });
+                }
+            }
             _ => {}
         }
         None
@@ -206,11 +259,17 @@ impl State {
 
     /// Keys that do something right now, as `(keys, what they do)`.
     pub(super) fn key_bindings(&self) -> &'static [(&'static str, &'static str)] {
+        if let Some(prompt) = &self.prompt {
+            return match prompt.ask {
+                Ask::Delete(_) => &[("y", "delete"), ("n", "keep")],
+                _ => &[("type", "text"), ("enter", "save"), ("esc", "cancel")],
+            };
+        }
         if self.picker.is_some() {
             return &[
                 ("type", "filter"),
                 ("alt+↑↓", "choose"),
-                ("enter", "open"),
+                ("enter", "open or create"),
                 ("esc", "close"),
             ];
         }
@@ -228,11 +287,11 @@ impl State {
                 ("q", "quit"),
             ],
             (Focus::Page, Page::Manager) => &[
-                ("/", "find note"),
+                ("/", "note"),
                 ("↑↓", "move"),
-                ("enter", "done/todo"),
+                ("enter", "done"),
+                ("a/c/d", "add/edit/del"),
                 ("tab", "sidebar"),
-                ("r", "refresh"),
                 ("q", "quit"),
             ],
             (Focus::Page, _) => &[("tab", "sidebar"), ("r", "refresh"), ("q", "quit")],
@@ -284,11 +343,84 @@ mod tests {
     fn opens_the_first_note_and_keeps_it_on_refresh() {
         let mut state = with_notes();
         assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main.md"));
-        state.manager.open(Some("todo.md".into()));
-        state.set_notes(vec!["a.md".into(), "todo.md".into()]);
-        assert_eq!(state.manager.note.as_deref(), Some("todo.md"));
+        state.manager.open(Some("new.md".into()));
+        // Not on the server yet, but still the open one.
         state.set_notes(vec!["a.md".into()]);
-        assert_eq!(state.manager.note.as_deref(), Some("a.md"));
+        assert_eq!(state.manager.note.as_deref(), Some("new.md"));
+    }
+
+    /// A state on the manager page, with one todo selected.
+    fn with_a_todo() -> State {
+        let mut state = with_notes();
+        state.focus = Focus::Page;
+        state.manager.set_todos(vec![Todo::new(
+            Id("a1".into()),
+            "milk",
+            chrono::NaiveDate::MIN,
+        )]);
+        state
+    }
+
+    #[test]
+    fn a_adds_a_todo_with_the_typed_text() {
+        let mut state = with_a_todo();
+        state.on_key(press(KeyCode::Char('a')));
+        // Letters type, even movement keys and `q`.
+        type_text(&mut state, " jq  ");
+        assert!(state.running);
+        assert_eq!(
+            state.on_key(press(KeyCode::Enter)),
+            Some(Action::Add("jq".into()))
+        );
+        assert!(state.prompt.is_none());
+    }
+
+    #[test]
+    fn empty_text_or_esc_adds_nothing() {
+        let mut state = with_a_todo();
+        state.on_key(press(KeyCode::Char('a')));
+        assert_eq!(state.on_key(press(KeyCode::Enter)), None);
+        assert!(state.prompt.is_none());
+        state.on_key(press(KeyCode::Char('a')));
+        type_text(&mut state, "x");
+        assert_eq!(state.on_key(press(KeyCode::Esc)), None);
+        assert!(state.prompt.is_none());
+    }
+
+    #[test]
+    fn c_changes_the_text_starting_from_the_old_one() {
+        let mut state = with_a_todo();
+        state.on_key(press(KeyCode::Char('c')));
+        state.on_key(press(KeyCode::Backspace));
+        type_text(&mut state, "k!");
+        assert_eq!(
+            state.on_key(press(KeyCode::Enter)),
+            Some(Action::Change(Id("a1".into()), "milk!".into()))
+        );
+    }
+
+    #[rstest]
+    #[case::yes(KeyCode::Char('y'), Some(Action::Delete(Id("a1".into()))))]
+    #[case::no(KeyCode::Char('n'), None)]
+    #[case::esc(KeyCode::Esc, None)]
+    fn d_deletes_after_a_yes(#[case] answer: KeyCode, #[case] action: Option<Action>) {
+        let mut state = with_a_todo();
+        state.on_key(press(KeyCode::Char('d')));
+        // Other keys wait for the answer.
+        assert_eq!(state.on_key(press(KeyCode::Char('x'))), None);
+        assert!(state.prompt.is_some());
+        assert_eq!(state.on_key(press(answer)), action);
+        assert!(state.prompt.is_none());
+    }
+
+    #[test]
+    fn picking_a_new_note_opens_it_and_asks_for_a_todo() {
+        let mut state = with_notes();
+        state.on_key(press(KeyCode::Char('/')));
+        type_text(&mut state, "zz/new");
+        assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::LoadTodos));
+        assert_eq!(state.manager.note.as_deref(), Some("zz/new.md"));
+        assert_eq!(state.prompt.as_ref().map(|p| &p.ask), Some(&Ask::Add));
     }
 
     #[test]
