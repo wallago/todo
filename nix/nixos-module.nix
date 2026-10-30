@@ -9,10 +9,14 @@ let
   cfg = config.services.todo;
   settingsFormat = pkgs.formats.toml { };
   # systemd copies the token here (LoadCredential), readable by the service only.
-  tokenPath = "/run/credentials/todo-server.service/token";
-  settings = lib.recursiveUpdate cfg.server.settings (
-    lib.optionalAttrs (cfg.server.tokenFile != null) { server.token_file = tokenPath; }
-  );
+  credentials = "/run/credentials/todo-server.service";
+  settings = lib.recursiveUpdate cfg.server.settings {
+    server =
+      lib.optionalAttrs (cfg.server.tokenFile != null) { token_file = "${credentials}/token"; }
+      // lib.optionalAttrs (cfg.server.readTokenFile != null) {
+        read_token_file = "${credentials}/read-token";
+      };
+  };
   configFile = settingsFormat.generate "todo-server.toml" settings;
   vFlag = n: lib.optionalString (n > 0) "-${lib.concatStrings (lib.replicate n "v")}";
   serverPort = cfg.server.settings.server.port or 3000;
@@ -83,6 +87,16 @@ in
           so the token stays out of the Nix store. null: no auth.
         '';
       };
+      readTokenFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/run/agenix/todo-read-token";
+        description = ''
+          File holding a read-only token for GET /api/agenda, also accepted
+          as ?token= (phone widgets like KWGT can't set headers). Use a
+          different value from tokenFile. Needs tokenFile.
+        '';
+      };
     };
 
     firewallInterfaces = lib.mkOption {
@@ -99,6 +113,10 @@ in
         {
           assertion = lib.hasPrefix "/" (cfg.server.settings.vault.root or "");
           message = "services.todo.server.settings.vault.root must be an absolute path.";
+        }
+        {
+          assertion = cfg.server.readTokenFile == null || cfg.server.tokenFile != null;
+          message = "services.todo.server.readTokenFile needs services.todo.server.tokenFile.";
         }
       ];
 
@@ -124,8 +142,12 @@ in
             UMask = "0007";
             ReadWritePaths = [ cfg.server.settings.vault.root ];
           }
-          // lib.optionalAttrs (cfg.server.tokenFile != null) {
-            LoadCredential = "token:${cfg.server.tokenFile}";
+          // {
+            LoadCredential =
+              lib.optional (cfg.server.tokenFile != null) "token:${cfg.server.tokenFile}"
+              ++ lib.optional (
+                cfg.server.readTokenFile != null
+              ) "read-token:${cfg.server.readTokenFile}";
           };
       };
 

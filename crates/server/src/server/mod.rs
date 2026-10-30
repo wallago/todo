@@ -8,6 +8,8 @@ use crate::{
     prelude::*,
 };
 
+/// `/api/agenda`.
+mod agenda;
 /// Errors answered as JSON.
 mod api_error;
 /// Bearer token.
@@ -22,18 +24,27 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
-/// Global server routes. With a `token`, `/api` and `/mcp` need it.
-fn routes(state: AppState, mcp_config: &McpConfig, token: Option<auth::Token>) -> Router {
+/// Global server routes. With `tokens`, `/api` and `/mcp` need the main
+/// token; `/api/agenda` also takes the read-only one.
+fn routes(state: AppState, mcp_config: &McpConfig, tokens: Option<auth::Tokens>) -> Router {
     let protected = Router::new()
         .merge(todos::routes())
         .nest_service("/mcp", mcp::service(state.clone(), mcp_config));
-    let protected = match token {
-        Some(token) => protected.layer(middleware::from_fn_with_state(token, auth::require)),
-        None => protected,
+    let readable = agenda::routes();
+    let (protected, readable) = match tokens {
+        Some(tokens) => (
+            protected.layer(middleware::from_fn_with_state(
+                tokens.clone(),
+                auth::require,
+            )),
+            readable.layer(middleware::from_fn_with_state(tokens, auth::require_read)),
+        ),
+        None => (protected, readable),
     };
     Router::new()
         .route("/health", get(health))
         .merge(protected)
+        .merge(readable)
         .with_state(state)
 }
 
@@ -43,18 +54,30 @@ pub(super) async fn start(
     state: AppState,
     mcp_config: &McpConfig,
 ) -> Result<()> {
-    let token = config
-        .token_file
+    let read = config
+        .read_token_file
         .as_deref()
         .map(auth::Token::read)
         .transpose()?;
-    if token.is_none() {
-        tracing::warn!("no `token_file`: /api and /mcp are open to anyone who can reach them");
-    }
+    let tokens = match (config.token_file.as_deref(), read) {
+        (Some(main), read) => Some(auth::Tokens {
+            main: auth::Token::read(main)?,
+            read,
+        }),
+        (None, Some(_)) => {
+            return Err(Error::Config(
+                "`read_token_file` needs a `token_file` too".to_owned(),
+            ));
+        }
+        (None, None) => {
+            tracing::warn!("no `token_file`: /api and /mcp are open to anyone who can reach them");
+            None
+        }
+    };
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", config.address, config.port)).await?;
     tracing::info!("Server running on {}", listener.local_addr()?);
-    serve(listener, routes(state, mcp_config, token))
+    serve(listener, routes(state, mcp_config, tokens))
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
@@ -87,15 +110,15 @@ fn test_app(note: &str) -> (tempfile::TempDir, Router) {
     test_router(note, None)
 }
 
-/// Same as [`test_app`], with this token.
+/// Same as [`test_app`], with these tokens.
 #[cfg(test)]
-fn test_router(note: &str, token: Option<auth::Token>) -> (tempfile::TempDir, Router) {
+fn test_router(note: &str, tokens: Option<auth::Tokens>) -> (tempfile::TempDir, Router) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("todo.md"), note).expect("write note");
     let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
     (
         dir,
-        routes(AppState::new(store), &McpConfig::default(), token),
+        routes(AppState::new(store), &McpConfig::default(), tokens),
     )
 }
 
