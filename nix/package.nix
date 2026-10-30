@@ -6,7 +6,7 @@
   release ? true,
 }:
 naersk'.buildPackage {
-  pname = "todo";
+  pname = crate;
   version = "0.1.0";
   inherit src release;
   cargoBuildOptions =
@@ -16,6 +16,7 @@ naersk'.buildPackage {
       "-p"
       crate
     ];
+  mainProgram = crate;
   meta = {
     description = "Just a personal Todo app.";
     license = with lib.licenses; [
