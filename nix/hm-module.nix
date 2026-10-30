@@ -6,44 +6,42 @@ self:
   ...
 }:
 let
-  cfg = config.services.todo;
+  cfg = config.programs.todo;
   settingsFormat = pkgs.formats.toml { };
 in
 {
   options.packages."todo" = {
-    enable = lib.mkEnableOption "todo";
+    enable = lib.mkEnableOption "todo TUI";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      description = "Just a personal Todo app.";
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.tui;
+      description = "Package with the todo-tui binary.";
     };
 
     settings = lib.mkOption {
       type = settingsFormat.type;
       default = { };
-      example = { };
-      description = ''
-        Configuration written to the config.toml.
-        Every key is optional; omitted keys keep the built-in defaults.
-      '';
-    };
-    verbose = lib.mkOption {
-      type = lib.types.ints.between 0 3;
-      default = 1;
-      example = 3;
-      description = ''
-        Verbosity level, passed to the app as repeated `-v` flags — `2` becomes `-vv`.
-
-        - `0`: error / warn only, no `-v` flag
-        - `1`: info
-        - `2`: debug
-        - `3`: traces
-      '';
+      description = "Written to config.toml. token_file must be absolute.";
+      example = {
+        server = {
+          url = "http://127.0.0.1:3000";
+          token_file = "/path/token/file";
+        };
+        keys = {
+          up = "k";
+          down = "j";
+          left = "h";
+          right = "l";
+        };
+      };
     };
   };
 
   config = lib.mkIf cfg.enable {
-    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ ];
+    home.packages = [ cfg.package ];
+    xdg.configFile."todo-tui/config.toml" = lib.mkIf (cfg.settings != { }) {
+      source = settingsFormat.generate "todo-tui.toml" cfg.settings;
+    };
   };
 }
