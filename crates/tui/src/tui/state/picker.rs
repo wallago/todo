@@ -46,31 +46,6 @@ impl Picker {
             .map(String::as_str)
     }
 
-    /// The note to open: the selected match, or with none, the typed
-    /// path as a new note (`.md` added).
-    pub(in crate::tui) fn choice(&self) -> Option<String> {
-        if let Some(note) = self.selected() {
-            return Some(note.to_owned());
-        }
-        self.new_note()
-    }
-
-    /// The typed path as a note, when nothing matches it.
-    pub(in crate::tui) fn new_note(&self) -> Option<String> {
-        let path = self.query.trim().trim_matches('/');
-        if !self.matches.is_empty() || path.is_empty() {
-            return None;
-        }
-        let is_md = std::path::Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-        Some(if is_md {
-            path.to_owned()
-        } else {
-            format!("{path}.md")
-        })
-    }
-
     /// Edits the query or moves the cursor. Plain letters type, so the
     /// movement keys from `keys` need Alt or Ctrl here.
     pub(in crate::tui) fn on_key(&mut self, key: KeyEvent, keys: Keys) {
@@ -160,15 +135,5 @@ mod tests {
         assert_eq!(picker.selected(), Some("projects/todo/main.md"));
         type_text(&mut picker, "zzz");
         assert_eq!(picker.selected(), None);
-    }
-
-    #[test]
-    fn unmatched_query_is_a_new_note() {
-        let mut picker = Picker::new(vec!["todo.md".into()]);
-        assert_eq!(picker.new_note(), None);
-        type_text(&mut picker, "travel/norway");
-        assert_eq!(picker.choice().as_deref(), Some("travel/norway.md"));
-        type_text(&mut picker, ".md");
-        assert_eq!(picker.choice().as_deref(), Some("travel/norway.md"));
     }
 }

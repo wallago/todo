@@ -1,7 +1,7 @@
 //! The manager page: one note's todos.
 
 use ratatui::widgets::ListState;
-use todo_client::{Id, Todo};
+use todo_client::Todo;
 
 /// The note open on the manager page, and its todos.
 #[derive(Debug, Default)]
@@ -44,13 +44,6 @@ impl Manager {
     pub(in crate::tui) fn replace(&mut self, todo: Todo) {
         if let Some(old) = self.todos.iter_mut().find(|old| old.id == todo.id) {
             *old = todo;
-        }
-    }
-
-    /// Puts the cursor on the todo with `id`, if it's there.
-    pub(in crate::tui) fn select(&mut self, id: &Id) {
-        if let Some(at) = self.todos.iter().position(|todo| &todo.id == id) {
-            self.list.select(Some(at));
         }
     }
 

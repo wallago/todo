@@ -33,14 +33,6 @@ pub(super) fn render(picker: &mut Picker, frame: &mut Frame, page: Rect) {
         Span::styled("▏", ACCENT),
     ]);
     frame.render_widget(line, query);
-    if let Some(note) = picker.new_note() {
-        let hint = Line::from(vec![
-            Span::styled("+ new note ", ACCENT),
-            Span::styled(note_name(&note).to_owned(), PRIMARY),
-        ]);
-        frame.render_widget(hint, matches);
-        return;
-    }
     let names = list(
         picker.matches.iter().map(|note| note_name(note)),
         ratatui::widgets::Block::new(),

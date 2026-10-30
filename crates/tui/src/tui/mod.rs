@@ -61,93 +61,53 @@ pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
 /// Runs `action` against the server. A failure is shown, not returned,
 /// so a server that's down doesn't close the app.
 async fn apply(client: &Client, state: &mut State, action: Action) {
-    let what = format!("{action:?}");
     let result = load(client, state, action).await;
     state.error = result.err().map(|error| with_causes(&error));
     if let Some(error) = &state.error {
-        tracing::warn!("{what} failed: {error}");
+        tracing::warn!("{action:?} failed: {error}");
     }
 }
 
 /// The server calls behind [`apply`].
 async fn load(client: &Client, state: &mut State, action: Action) -> todo_client::Result<()> {
-    match action {
-        Action::Refresh => {
-            state.set_notes(client.notes().await?);
-            if state.page == Page::Stats {
-                load_stats(client, state).await?;
-            }
-            load_todos(client, state).await
+    if action == Action::Refresh {
+        state.set_notes(client.notes().await?);
+    }
+    if action == Action::LoadStats || (action == Action::Refresh && state.page == Page::Stats) {
+        let mut rows = Vec::with_capacity(state.notes.len());
+        for note in &state.notes {
+            let todos = client.list_note(note).await?;
+            let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
+            rows.push(NoteStats {
+                note: note.clone(),
+                done,
+                total: todos.len(),
+            });
         }
-        Action::LoadTodos => load_todos(client, state).await,
-        Action::LoadStats => load_stats(client, state).await,
-        Action::Toggle => {
-            if let Some(todo) = state.manager.selected() {
-                let toggled = if todo.status.is_closed() {
-                    let reopen = TodoPatch {
-                        status: Some(Status::Todo),
-                        ..TodoPatch::default()
-                    };
-                    client.update(&todo.id, &reopen).await?
-                } else {
-                    client.complete(&todo.id).await?
-                };
-                state.manager.replace(toggled);
-            }
-            Ok(())
-        }
-        Action::Add(mut new, status) => {
-            new.note.clone_from(&state.manager.note);
-            let added = client.add(&new).await?;
-            // New todos start unticked; set any other status after.
-            if status != Status::Todo {
-                let patch = TodoPatch {
-                    status: Some(status),
+        state.stats = rows;
+    }
+    if action == Action::Toggle {
+        if let Some(todo) = state.manager.selected() {
+            let toggled = if todo.status.is_closed() {
+                let reopen = TodoPatch {
+                    status: Some(Status::Todo),
                     ..TodoPatch::default()
                 };
-                client.update(&added.id, &patch).await?;
-            }
-            // A first todo creates its note, so the list may have grown.
-            state.set_notes(client.notes().await?);
-            load_todos(client, state).await?;
-            state.manager.select(&added.id);
-            Ok(())
+                client.update(&todo.id, &reopen).await?
+            } else {
+                client.complete(&todo.id).await?
+            };
+            state.manager.replace(toggled);
         }
-        Action::Change(id, patch) => {
-            let changed = client.update(&id, &patch).await?;
-            state.manager.replace(changed);
-            Ok(())
-        }
-        Action::Delete(id) => {
-            client.remove(&id).await?;
-            load_todos(client, state).await
-        }
+        return Ok(());
     }
-}
-
-/// Reloads the manager's note.
-async fn load_todos(client: &Client, state: &mut State) -> todo_client::Result<()> {
-    let todos = match &state.manager.note {
-        Some(note) => client.list_note(note).await?,
-        None => Vec::new(),
-    };
-    state.manager.set_todos(todos);
-    Ok(())
-}
-
-/// Reloads every note's counts.
-async fn load_stats(client: &Client, state: &mut State) -> todo_client::Result<()> {
-    let mut rows = Vec::with_capacity(state.notes.len());
-    for note in &state.notes {
-        let todos = client.list_note(note).await?;
-        let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
-        rows.push(NoteStats {
-            note: note.clone(),
-            done,
-            total: todos.len(),
-        });
+    if action != Action::LoadStats {
+        let todos = match &state.manager.note {
+            Some(note) => client.list_note(note).await?,
+            None => Vec::new(),
+        };
+        state.manager.set_todos(todos);
     }
-    state.stats = rows;
     Ok(())
 }
 
