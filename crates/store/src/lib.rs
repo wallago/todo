@@ -73,6 +73,17 @@ impl Store {
         Ok(store)
     }
 
+    /// Loads the whole vault again, e.g. after notes were added, renamed or
+    /// deleted outside the server. Keeps the old notes if it fails.
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::open`].
+    pub fn rescan(&mut self) -> Result<()> {
+        *self = Self::open(self.root.clone(), self.inbox.clone())?;
+        Ok(())
+    }
+
     /// Every todo, note by note.
     pub fn todos(&self) -> impl Iterator<Item = &Todo> {
         self.notes.values().flat_map(Document::todos)
@@ -503,6 +514,23 @@ mod tests {
         assert_eq!(store.remove(&id("aaaaaa"))?.text, "a");
         assert_eq!(read(&dir, "todo.md"), "# Todo\n- [ ] b ^bbbbbb\n");
         assert_eq!(store.get(&id("aaaaaa")), None);
+        Ok(())
+    }
+
+    #[test]
+    fn rescan_picks_up_new_moved_and_deleted_notes() -> Result<()> {
+        let dir = vault(&[("a.md", "- [ ] a ^aaaaaa\n"), ("b.md", "- [ ] b ^bbbbbb\n")]);
+        let mut store = Store::open(dir.path(), "a.md")?;
+        fs::create_dir(dir.path().join("trips")).expect("mkdir");
+        fs::rename(dir.path().join("a.md"), dir.path().join("trips/a.md")).expect("mv");
+        fs::remove_file(dir.path().join("b.md")).expect("rm");
+        fs::write(dir.path().join("c.md"), "- [ ] c ^cccccc\n").expect("write");
+        store.rescan()?;
+        let notes: Vec<&Path> = store.notes().collect();
+        assert_eq!(notes, [Path::new("c.md"), Path::new("trips/a.md")]);
+        // A moved todo keeps its id.
+        assert_eq!(store.get(&id("aaaaaa")).map(|t| t.text.as_str()), Some("a"));
+        assert_eq!(store.get(&id("bbbbbb")), None);
         Ok(())
     }
 

@@ -30,6 +30,8 @@ pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
     let config = Config::load(args.config.as_deref())?;
     let state = AppState::open(&config.vault.root, &config.vault.inbox)?;
+    // Dropping it stops the watch, so keep it until the server stops.
+    let _watcher = state.watch(&config.vault.root)?;
     server::start(&config.server, state, &config.mcp).await?;
     tracing::info!("Server stopped");
     Ok(())
