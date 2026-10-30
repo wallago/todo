@@ -10,7 +10,7 @@ let
   settingsFormat = pkgs.formats.toml { };
 in
 {
-  options.packages."todo" = {
+  options.programs."todo" = {
     enable = lib.mkEnableOption "todo TUI";
 
     package = lib.mkOption {
