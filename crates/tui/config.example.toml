@@ -3,3 +3,11 @@ url = "http://127.0.0.1:3000"
 # File holding the server's bearer token, relative to this file.
 # Unset: no token is sent.
 # token_file = "token"
+
+# Letters that move, on top of the arrow keys. Defaults: vim's hjkl.
+# In the note finder, hold Alt (or Ctrl) with them.
+[keys]
+up = "k"
+down = "j"
+left = "h"
+right = "l"

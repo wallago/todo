@@ -12,6 +12,34 @@ use crate::prelude::*;
 pub(crate) struct Config {
     /// The todo server to talk to.
     pub(crate) server: ServerConfig,
+    /// Movement keys, for layouts other than QWERTY.
+    pub(crate) keys: Keys,
+}
+
+/// `[keys]`: letters that move, on top of the arrow keys.
+/// In the note finder, hold Alt (or Ctrl) with them, since plain letters type.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct Keys {
+    /// Moves up a row.
+    pub(crate) up: char,
+    /// Moves down a row.
+    pub(crate) down: char,
+    /// Goes to the sidebar.
+    pub(crate) left: char,
+    /// Goes to the page.
+    pub(crate) right: char,
+}
+
+impl Default for Keys {
+    fn default() -> Self {
+        Self {
+            up: 'k',
+            down: 'j',
+            left: 'h',
+            right: 'l',
+        }
+    }
 }
 
 /// `[server]`: where the todo server is.

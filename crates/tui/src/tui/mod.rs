@@ -1,10 +1,10 @@
 //! Terminal user interface, styled like praline's.
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
-use todo_client::Client;
+use todo_client::{Client, Status, TodoPatch};
 use tokio::sync::mpsc;
 
-use crate::prelude::*;
+use crate::{config::Keys, prelude::*};
 
 /// What the UI shows, and how keys change it.
 mod state;
@@ -30,11 +30,14 @@ impl Drop for Restore {
 /// # Errors
 ///
 /// Returns an error if the terminal can't be set up, drawn to, or read from.
-pub(super) async fn run(client: &Client) -> Result<()> {
+pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
     let mut terminal = ratatui::try_init()?;
     let _restore = Restore;
     let mut events = read_events();
-    let mut state = State::default();
+    let mut state = State {
+        keys,
+        ..State::default()
+    };
     apply(client, &mut state, Action::Refresh).await;
     while state.running {
         terminal.draw(|frame| view::render(&mut state, frame))?;
@@ -82,6 +85,21 @@ async fn load(client: &Client, state: &mut State, action: Action) -> todo_client
             });
         }
         state.stats = rows;
+    }
+    if action == Action::Toggle {
+        if let Some(todo) = state.manager.selected() {
+            let toggled = if todo.status.is_closed() {
+                let reopen = TodoPatch {
+                    status: Some(Status::Todo),
+                    ..TodoPatch::default()
+                };
+                client.update(&todo.id, &reopen).await?
+            } else {
+                client.complete(&todo.id).await?
+            };
+            state.manager.replace(toggled);
+        }
+        return Ok(());
     }
     if action != Action::LoadStats {
         let todos = match &state.manager.note {

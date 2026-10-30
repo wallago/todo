@@ -2,6 +2,8 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::config::Keys;
+
 /// The manager page: one note's todos.
 mod manager;
 /// The note finder popup.
@@ -71,6 +73,8 @@ pub(super) enum Action {
     LoadTodos,
     /// Reload every note's counts.
     LoadStats,
+    /// Tick the selected todo, or reopen it if it's closed.
+    Toggle,
 }
 
 /// Done and total todos of one note.
@@ -103,6 +107,8 @@ pub(super) struct State {
     pub(super) stats: Vec<NoteStats>,
     /// Last server error, shown until the next successful call.
     pub(super) error: Option<String>,
+    /// Movement keys from the config.
+    pub(super) keys: Keys,
 }
 
 impl Default for State {
@@ -116,6 +122,7 @@ impl Default for State {
             picker: None,
             stats: Vec::new(),
             error: None,
+            keys: Keys::default(),
         }
     }
 }
@@ -160,15 +167,16 @@ impl State {
                     })
                 }
                 _ => {
-                    picker.on_key(key.code);
+                    picker.on_key(key, self.keys);
                     None
                 }
             };
         }
-        let (up, down) = (
-            matches!(key.code, KeyCode::Up | KeyCode::Char('k')),
-            matches!(key.code, KeyCode::Down | KeyCode::Char('j')),
-        );
+        let keys = self.keys;
+        let is =
+            |arrow: KeyCode, letter: char| key.code == arrow || key.code == KeyCode::Char(letter);
+        let (up, down) = (is(KeyCode::Up, keys.up), is(KeyCode::Down, keys.down));
+        let (left, right) = (is(KeyCode::Left, keys.left), is(KeyCode::Right, keys.right));
         match (self.focus, self.page, key.code) {
             (_, _, KeyCode::Char('q')) => self.running = false,
             (_, _, KeyCode::Char('r')) => return Some(Action::Refresh),
@@ -183,13 +191,14 @@ impl State {
                     return Some(Action::LoadStats);
                 }
             }
-            (Focus::Sidebar, _, KeyCode::Tab | KeyCode::Enter | KeyCode::Char('l')) => {
-                self.focus = Focus::Page;
-            }
-            (Focus::Page, _, KeyCode::Tab | KeyCode::Esc | KeyCode::Char('h')) => {
-                self.focus = Focus::Sidebar;
-            }
+            (Focus::Sidebar, _, KeyCode::Tab | KeyCode::Enter) => self.focus = Focus::Page,
+            (Focus::Sidebar, _, _) if right => self.focus = Focus::Page,
+            (Focus::Page, _, KeyCode::Tab | KeyCode::Esc) => self.focus = Focus::Sidebar,
+            (Focus::Page, _, _) if left => self.focus = Focus::Sidebar,
             (Focus::Page, Page::Manager, _) if up || down => self.manager.step(down),
+            (Focus::Page, Page::Manager, KeyCode::Enter) if self.manager.selected().is_some() => {
+                return Some(Action::Toggle);
+            }
             _ => {}
         }
         None
@@ -200,7 +209,7 @@ impl State {
         if self.picker.is_some() {
             return &[
                 ("type", "filter"),
-                ("↑↓", "choose"),
+                ("alt+↑↓", "choose"),
                 ("enter", "open"),
                 ("esc", "close"),
             ];
@@ -221,6 +230,7 @@ impl State {
             (Focus::Page, Page::Manager) => &[
                 ("/", "find note"),
                 ("↑↓", "move"),
+                ("enter", "done/todo"),
                 ("tab", "sidebar"),
                 ("r", "refresh"),
                 ("q", "quit"),
@@ -234,6 +244,7 @@ impl State {
 mod tests {
     use pretty_assertions::assert_eq;
     use rstest::rstest;
+    use todo_client::{Id, Todo};
 
     use super::*;
 
@@ -316,6 +327,33 @@ mod tests {
         assert_eq!(state.on_key(press(KeyCode::Esc)), None);
         assert!(state.picker.is_none());
         assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main.md"));
+    }
+
+    #[test]
+    fn custom_keys_move_and_enter_toggles() {
+        let mut state = with_notes();
+        state.keys = Keys {
+            up: 'i',
+            down: 'e',
+            left: 'n',
+            right: 'o',
+        };
+        state.manager.set_todos(vec![
+            Todo::new(Id("a".into()), "a", chrono::NaiveDate::MIN),
+            Todo::new(Id("b".into()), "b", chrono::NaiveDate::MIN),
+        ]);
+        state.on_key(press(KeyCode::Char('o')));
+        assert_eq!(state.focus, Focus::Page);
+        state.on_key(press(KeyCode::Char('e')));
+        assert_eq!(state.manager.list.selected(), Some(1));
+        // The old vim keys do nothing now.
+        state.on_key(press(KeyCode::Char('k')));
+        assert_eq!(state.manager.list.selected(), Some(1));
+        state.on_key(press(KeyCode::Char('i')));
+        assert_eq!(state.manager.list.selected(), Some(0));
+        assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::Toggle));
+        state.on_key(press(KeyCode::Char('n')));
+        assert_eq!(state.focus, Focus::Sidebar);
     }
 
     #[test]

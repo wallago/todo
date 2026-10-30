@@ -35,7 +35,7 @@ pub async fn run(args: &Args) -> Result<()> {
         result = tokio::signal::ctrl_c() => {
             tracing::info!("Interrupted: {:?}", result);
         },
-        result = tui::run(&client) => {
+        result = tui::run(&client, config.keys) => {
             tracing::info!("TUI stopped: {:?}", result);
         },
     }

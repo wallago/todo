@@ -4,9 +4,13 @@ use nucleo_matcher::{
     Config, Matcher,
     pattern::{CaseMatching, Normalization, Pattern},
 };
-use ratatui::{crossterm::event::KeyCode, widgets::ListState};
+use ratatui::{
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    widgets::ListState,
+};
 
 use super::manager::step;
+use crate::config::Keys;
 
 /// A query, and the notes it fuzzy-matches, best first.
 #[derive(Debug)]
@@ -42,16 +46,26 @@ impl Picker {
             .map(String::as_str)
     }
 
-    /// Edits the query or moves the cursor.
-    pub(in crate::tui) fn on_key(&mut self, code: KeyCode) {
-        match code {
+    /// Edits the query or moves the cursor. Plain letters type, so the
+    /// movement keys from `keys` need Alt or Ctrl here.
+    pub(in crate::tui) fn on_key(&mut self, key: KeyEvent, keys: Keys) {
+        let held = key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char(c) if held && c == keys.up => {
+                step(&mut self.list, self.matches.len(), false);
+            }
+            KeyCode::Char(c) if held && c == keys.down => {
+                step(&mut self.list, self.matches.len(), true);
+            }
             KeyCode::Up => step(&mut self.list, self.matches.len(), false),
-            KeyCode::Down | KeyCode::Tab => step(&mut self.list, self.matches.len(), true),
+            KeyCode::Down => step(&mut self.list, self.matches.len(), true),
             KeyCode::Backspace => {
                 self.query.pop();
                 self.filter();
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if !held => {
                 self.query.push(c);
                 self.filter();
             }
@@ -80,6 +94,34 @@ mod tests {
 
     use super::*;
 
+    /// Presses each character of `text`.
+    fn type_text(picker: &mut Picker, text: &str) {
+        for c in text.chars() {
+            picker.on_key(
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                Keys::default(),
+            );
+        }
+    }
+
+    #[test]
+    fn alt_with_a_movement_key_moves_instead_of_typing() {
+        let mut picker = Picker::new(vec!["a.md".into(), "b.md".into()]);
+        let keys = Keys {
+            up: 'i',
+            down: 'e',
+            ..Keys::default()
+        };
+        picker.on_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT), keys);
+        assert_eq!(picker.selected(), Some("b.md"));
+        picker.on_key(
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL),
+            keys,
+        );
+        assert_eq!(picker.selected(), Some("a.md"));
+        assert_eq!(picker.query, "");
+    }
+
     #[test]
     fn filters_as_you_type() {
         let mut picker = Picker::new(vec![
@@ -88,14 +130,10 @@ mod tests {
             "travel/japan.md".into(),
         ]);
         assert_eq!(picker.matches.len(), 3);
-        for c in "tdmain".chars() {
-            picker.on_key(KeyCode::Char(c));
-        }
+        type_text(&mut picker, "tdmain");
         assert_eq!(picker.matches, vec!["projects/todo/main.md".to_owned()]);
         assert_eq!(picker.selected(), Some("projects/todo/main.md"));
-        for c in "zzz".chars() {
-            picker.on_key(KeyCode::Char(c));
-        }
+        type_text(&mut picker, "zzz");
         assert_eq!(picker.selected(), None);
     }
 }

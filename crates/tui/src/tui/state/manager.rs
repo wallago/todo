@@ -35,6 +35,18 @@ impl Manager {
         self.todos = todos;
     }
 
+    /// The todo under the cursor.
+    pub(in crate::tui) fn selected(&self) -> Option<&Todo> {
+        self.list.selected().and_then(|at| self.todos.get(at))
+    }
+
+    /// Puts `todo` in place of the one with the same id.
+    pub(in crate::tui) fn replace(&mut self, todo: Todo) {
+        if let Some(old) = self.todos.iter_mut().find(|old| old.id == todo.id) {
+            *old = todo;
+        }
+    }
+
     /// Moves the cursor one row, without wrapping.
     pub(in crate::tui) fn step(&mut self, down: bool) {
         step(&mut self.list, self.todos.len(), down);
