@@ -11,6 +11,7 @@ pub(crate) struct ServerConfig {
     /// Port to listen.
     pub(crate) port: u16,
     /// File holding the bearer token for `/api` and `/mcp`. Unset: no auth.
+    #[serde(alias = "tokenFile")]
     pub(crate) token_file: Option<PathBuf>,
 }
 

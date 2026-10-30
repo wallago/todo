@@ -13,6 +13,7 @@ pub(crate) struct ServerConfig {
     /// Base URL, like `http://127.0.0.1:3000`.
     pub(crate) url: String,
     /// File holding the server's bearer token, relative to the config file.
+    #[serde(alias = "tokenFile")]
     pub(crate) token_file: Option<PathBuf>,
 }
 
