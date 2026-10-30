@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Clear, ListState},
+    widgets::{Block, BorderType, Clear, ListState, Padding, Paragraph},
 };
 use todo_client::{Priority, Status};
 
@@ -19,7 +19,7 @@ use crate::tui::{
 
 /// The whole form, centred over the page.
 pub(super) fn render(form: &Form, frame: &mut Frame, page: Rect) {
-    let area = page.centered(Constraint::Max(70), Constraint::Length(14));
+    let area = page.centered(Constraint::Max(70), Constraint::Length(15));
     frame.render_widget(Clear, area);
     let title = if form.is_edit() {
         "edit todo"
@@ -49,9 +49,9 @@ pub(super) fn render(form: &Form, frame: &mut Frame, page: Rect) {
     }
 }
 
-/// One `label  value` row per field, with a blank row between.
+/// One rounded box per field, titled with its name, lit while focused.
 fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
-    let rows = Layout::vertical([Constraint::Length(2); 4]).split(rect);
+    let rows = Layout::vertical([Constraint::Length(3); 4]).split(rect);
     let due = form
         .due
         .map_or_else(|| "none".to_owned(), |due| due.to_string());
@@ -63,31 +63,33 @@ fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
     ];
     for ((field, value), row) in Field::ALL.iter().zip(values).zip(rows.iter()) {
         let focused = *field == form.field;
-        let (bar, label) = if focused {
-            (
-                Span::styled("▌ ", ACCENT),
-                Span::styled(label(*field), ACCENT).bold(),
-            )
+        let (title, border) = if focused {
+            (ACCENT, ACCENT)
         } else {
-            (Span::raw("  "), Span::styled(label(*field), SECONDARY))
+            (SECONDARY, ACCENT_BIS)
         };
-        let mut spans = vec![bar, label, Span::styled(value, PRIMARY)];
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(border)
+            .title(Line::from(format!(" {} ", label(*field))).fg(title).bold())
+            .padding(Padding::horizontal(1));
+        let mut spans = vec![Span::styled(value, PRIMARY)];
         if focused && *field == Field::Title {
             spans.push(Span::styled("▏", ACCENT));
         } else if *field != Field::Title {
             spans.push(Span::styled(" ▾", SECONDARY));
         }
-        frame.render_widget(Line::from(spans), *row);
+        frame.render_widget(Paragraph::new(Line::from(spans)).block(block), *row);
     }
 }
 
-/// Label column, padded to one width.
+/// The field's name, on its box.
 fn label(field: Field) -> &'static str {
     match field {
-        Field::Title => "title     ",
-        Field::Priority => "priority  ",
-        Field::Due => "due       ",
-        Field::Status => "status    ",
+        Field::Title => "title",
+        Field::Priority => "priority",
+        Field::Due => "due",
+        Field::Status => "status",
     }
 }
 
@@ -161,5 +163,5 @@ fn calendar(day: NaiveDate, form: &Form, frame: &mut Frame, rect: Rect) {
     if form.due.is_none() {
         lines.push(Line::from(Span::styled("no due date", ACCENT_BIS)));
     }
-    frame.render_widget(ratatui::widgets::Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
 }

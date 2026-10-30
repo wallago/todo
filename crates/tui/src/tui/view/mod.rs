@@ -250,8 +250,9 @@ mod tests {
         state.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         let screen = screen(&mut state);
         assert!(screen.contains("new todo"));
-        assert!(screen.contains("title     x"));
-        assert!(screen.contains("priority  normal"));
+        assert!(screen.contains("╭ title ─"));
+        assert!(screen.contains("│ x▏"));
+        assert!(screen.contains("normal ▾"));
         assert!(screen.contains("save"));
     }
 
