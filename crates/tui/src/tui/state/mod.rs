@@ -2,21 +2,34 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use todo_client::Id;
+use todo_client::{Id, NewTodo, Status, TodoPatch};
 
 use crate::config::Keys;
 
+/// The `y/n` popup before a delete.
+mod confirm;
+/// The add and edit form.
+mod form;
 /// The manager page: one note's todos.
 mod manager;
 /// The note finder popup.
 mod picker;
-/// The add, change and delete popup.
-mod prompt;
 
+pub(super) use confirm::Confirm;
+pub(super) use form::{Field, Form, PRIORITIES, STATUSES};
 pub(super) use manager::Manager;
 pub(super) use picker::Picker;
-use prompt::Outcome;
-pub(super) use prompt::{Ask, Prompt};
+
+/// What a key did to a popup.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    /// Still open.
+    Open,
+    /// Closed without doing anything.
+    Cancel,
+    /// Closed with an answer.
+    Submit,
+}
 
 /// Which side owns the keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,10 +94,10 @@ pub(super) enum Action {
     LoadStats,
     /// Tick the selected todo, or reopen it if it's closed.
     Toggle,
-    /// Add a todo with this text to the manager's note.
-    Add(String),
-    /// Set this todo's text.
-    Change(Id, String),
+    /// Add this todo to the manager's note, then give it this status.
+    Add(NewTodo, Status),
+    /// Apply this patch to this todo.
+    Change(Id, TodoPatch),
     /// Delete this todo.
     Delete(Id),
 }
@@ -115,8 +128,10 @@ pub(super) struct State {
     pub(super) manager: Manager,
     /// The note finder, while open.
     pub(super) picker: Option<Picker>,
-    /// The add, change or delete popup, while open.
-    pub(super) prompt: Option<Prompt>,
+    /// The add or edit form, while open.
+    pub(super) form: Option<Form>,
+    /// The delete confirmation, while open.
+    pub(super) confirm: Option<Confirm>,
     /// The stats page, one row per note.
     pub(super) stats: Vec<NoteStats>,
     /// Last server error, shown until the next successful call.
@@ -134,7 +149,8 @@ impl Default for State {
             notes: Vec::new(),
             manager: Manager::default(),
             picker: None,
-            prompt: None,
+            form: None,
+            confirm: None,
             stats: Vec::new(),
             error: None,
             keys: Keys::default(),
@@ -174,10 +190,7 @@ impl State {
                     note.map(|note| {
                         // A new note has no file until its first todo: ask for it.
                         if !self.notes.contains(&note) {
-                            self.prompt = Some(Prompt {
-                                ask: Ask::Add,
-                                input: String::new(),
-                            });
+                            self.form = Some(Form::new(today()));
                         }
                         self.manager.open(Some(note));
                         Action::LoadTodos
@@ -189,21 +202,28 @@ impl State {
                 }
             };
         }
-        if let Some(prompt) = &mut self.prompt {
-            return match prompt.on_key(key.code) {
+        // Popups take every key while open.
+        if let Some(form) = &mut self.form {
+            return match form.on_key(key, self.keys) {
                 Outcome::Open => None,
                 Outcome::Cancel => {
-                    self.prompt = None;
+                    self.form = None;
                     None
                 }
-                Outcome::Submit => self.prompt.take().map(|prompt| {
-                    let text = prompt.input.trim().to_owned();
-                    match prompt.ask {
-                        Ask::Add => Action::Add(text),
-                        Ask::Change(id) => Action::Change(id, text),
-                        Ask::Delete(id) => Action::Delete(id),
-                    }
-                }),
+                Outcome::Submit => self.form.take().and_then(Form::action),
+            };
+        }
+        if self.confirm.is_some() {
+            return match Confirm::on_key(key.code) {
+                Outcome::Open => None,
+                Outcome::Cancel => {
+                    self.confirm = None;
+                    None
+                }
+                Outcome::Submit => self
+                    .confirm
+                    .take()
+                    .map(|confirm| Action::Delete(confirm.id)),
             };
         }
         let keys = self.keys;
@@ -234,23 +254,19 @@ impl State {
                 return Some(Action::Toggle);
             }
             (_, Page::Manager, KeyCode::Char('a')) if self.manager.note.is_some() => {
-                self.prompt = Some(Prompt {
-                    ask: Ask::Add,
-                    input: String::new(),
-                });
+                self.form = Some(Form::new(today()));
             }
-            (_, Page::Manager, KeyCode::Char(c @ ('c' | 'd'))) => {
-                if let Some(todo) = self.manager.selected() {
-                    let id = todo.id.clone();
-                    self.prompt = Some(Prompt {
-                        ask: if c == 'c' {
-                            Ask::Change(id)
-                        } else {
-                            Ask::Delete(id)
-                        },
-                        input: todo.text.clone(),
-                    });
-                }
+            (_, Page::Manager, KeyCode::Char('c')) => {
+                self.form = self
+                    .manager
+                    .selected()
+                    .map(|todo| Form::edit(todo, today()));
+            }
+            (_, Page::Manager, KeyCode::Char('d')) => {
+                self.confirm = self.manager.selected().map(|todo| Confirm {
+                    id: todo.id.clone(),
+                    text: todo.text.clone(),
+                });
             }
             _ => {}
         }
@@ -259,11 +275,27 @@ impl State {
 
     /// Keys that do something right now, as `(keys, what they do)`.
     pub(super) fn key_bindings(&self) -> &'static [(&'static str, &'static str)] {
-        if let Some(prompt) = &self.prompt {
-            return match prompt.ask {
-                Ask::Delete(_) => &[("y", "delete"), ("n", "keep")],
-                _ => &[("type", "text"), ("enter", "save"), ("esc", "cancel")],
+        if let Some(form) = &self.form {
+            return match form.field {
+                Field::Title => &[("tab", "next"), ("enter", "save"), ("esc", "cancel")],
+                Field::Due => &[
+                    ("arrows", "day"),
+                    ("pgup/dn", "month"),
+                    ("t", "today"),
+                    ("⌫", "none"),
+                    ("tab", "next"),
+                    ("enter", "save"),
+                ],
+                _ => &[
+                    ("↑↓", "choose"),
+                    ("tab", "next"),
+                    ("enter", "save"),
+                    ("esc", "cancel"),
+                ],
             };
+        }
+        if self.confirm.is_some() {
+            return &[("y", "delete"), ("n", "keep")];
         }
         if self.picker.is_some() {
             return &[
@@ -297,6 +329,11 @@ impl State {
             (Focus::Page, _) => &[("tab", "sidebar"), ("r", "refresh"), ("q", "quit")],
         }
     }
+}
+
+/// Today, in local time: the calendar's starting point.
+fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
 }
 
 #[cfg(test)]
@@ -362,40 +399,45 @@ mod tests {
     }
 
     #[test]
-    fn a_adds_a_todo_with_the_typed_text() {
+    fn a_opens_an_empty_form_that_adds_the_typed_text() {
         let mut state = with_a_todo();
         state.on_key(press(KeyCode::Char('a')));
-        // Letters type, even movement keys and `q`.
+        // Letters type in the title, even movement keys and `q`.
         type_text(&mut state, " jq  ");
         assert!(state.running);
+        let new = NewTodo {
+            text: "jq".into(),
+            ..NewTodo::default()
+        };
         assert_eq!(
             state.on_key(press(KeyCode::Enter)),
-            Some(Action::Add("jq".into()))
+            Some(Action::Add(new, Status::Todo))
         );
-        assert!(state.prompt.is_none());
+        assert!(state.form.is_none());
     }
 
     #[test]
-    fn empty_text_or_esc_adds_nothing() {
+    fn esc_closes_the_form_without_saving() {
         let mut state = with_a_todo();
-        state.on_key(press(KeyCode::Char('a')));
-        assert_eq!(state.on_key(press(KeyCode::Enter)), None);
-        assert!(state.prompt.is_none());
         state.on_key(press(KeyCode::Char('a')));
         type_text(&mut state, "x");
         assert_eq!(state.on_key(press(KeyCode::Esc)), None);
-        assert!(state.prompt.is_none());
+        assert!(state.form.is_none());
     }
 
     #[test]
-    fn c_changes_the_text_starting_from_the_old_one() {
+    fn c_opens_the_form_on_the_selected_todo() {
         let mut state = with_a_todo();
         state.on_key(press(KeyCode::Char('c')));
-        state.on_key(press(KeyCode::Backspace));
-        type_text(&mut state, "k!");
+        assert_eq!(state.form.as_ref().map(|f| f.title.as_str()), Some("milk"));
+        type_text(&mut state, "!");
+        let patch = TodoPatch {
+            text: Some("milk!".into()),
+            ..TodoPatch::default()
+        };
         assert_eq!(
             state.on_key(press(KeyCode::Enter)),
-            Some(Action::Change(Id("a1".into()), "milk!".into()))
+            Some(Action::Change(Id("a1".into()), patch))
         );
     }
 
@@ -408,9 +450,9 @@ mod tests {
         state.on_key(press(KeyCode::Char('d')));
         // Other keys wait for the answer.
         assert_eq!(state.on_key(press(KeyCode::Char('x'))), None);
-        assert!(state.prompt.is_some());
+        assert!(state.confirm.is_some());
         assert_eq!(state.on_key(press(answer)), action);
-        assert!(state.prompt.is_none());
+        assert!(state.confirm.is_none());
     }
 
     #[test]
@@ -420,7 +462,7 @@ mod tests {
         type_text(&mut state, "zz/new");
         assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::LoadTodos));
         assert_eq!(state.manager.note.as_deref(), Some("zz/new.md"));
-        assert_eq!(state.prompt.as_ref().map(|p| &p.ask), Some(&Ask::Add));
+        assert!(state.form.as_ref().is_some_and(|form| !form.is_edit()));
     }
 
     #[test]

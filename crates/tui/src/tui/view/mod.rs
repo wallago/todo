@@ -17,12 +17,14 @@ use super::{
 
 /// The about page.
 mod about;
+/// The `y/n` popup before a delete.
+mod confirm;
+/// The add and edit form.
+mod form;
 /// The manager page.
 mod manager;
 /// The note finder popup.
 mod picker;
-/// The add, change and delete popup.
-mod prompt;
 /// The stats page.
 mod stats;
 
@@ -59,8 +61,11 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
     if let Some(picker) = &mut state.picker {
         picker::render(picker, frame, page);
     }
-    if let Some(prompt) = &state.prompt {
-        prompt::render(prompt, frame, page);
+    if let Some(form) = &state.form {
+        form::render(form, frame, page);
+    }
+    if let Some(confirm) = &state.confirm {
+        confirm::render(confirm, frame, page);
     }
     render_key_bindings(state, frame, frame.area());
 }
@@ -238,14 +243,15 @@ mod tests {
     }
 
     #[test]
-    fn prompt_pops_up_with_the_typed_text() {
+    fn form_pops_up_with_the_typed_title() {
         let mut state = with_todos();
         state.focus = Focus::Page;
         state.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         state.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         let screen = screen(&mut state);
         assert!(screen.contains("new todo"));
-        assert!(screen.contains("> x"));
+        assert!(screen.contains("title     x"));
+        assert!(screen.contains("priority  normal"));
         assert!(screen.contains("save"));
     }
 

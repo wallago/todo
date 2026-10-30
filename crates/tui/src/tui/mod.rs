@@ -1,7 +1,7 @@
 //! Terminal user interface, styled like praline's.
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
-use todo_client::{Client, NewTodo, Status, TodoPatch};
+use todo_client::{Client, Status, TodoPatch};
 use tokio::sync::mpsc;
 
 use crate::{config::Keys, prelude::*};
@@ -96,24 +96,24 @@ async fn load(client: &Client, state: &mut State, action: Action) -> todo_client
             }
             Ok(())
         }
-        Action::Add(text) => {
-            let new = NewTodo {
-                text,
-                note: state.manager.note.clone(),
-                ..NewTodo::default()
-            };
+        Action::Add(mut new, status) => {
+            new.note.clone_from(&state.manager.note);
             let added = client.add(&new).await?;
+            // New todos start unticked; set any other status after.
+            if status != Status::Todo {
+                let patch = TodoPatch {
+                    status: Some(status),
+                    ..TodoPatch::default()
+                };
+                client.update(&added.id, &patch).await?;
+            }
             // A first todo creates its note, so the list may have grown.
             state.set_notes(client.notes().await?);
             load_todos(client, state).await?;
             state.manager.select(&added.id);
             Ok(())
         }
-        Action::Change(id, text) => {
-            let patch = TodoPatch {
-                text: Some(text),
-                ..TodoPatch::default()
-            };
+        Action::Change(id, patch) => {
             let changed = client.update(&id, &patch).await?;
             state.manager.replace(changed);
             Ok(())
