@@ -2,7 +2,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use todo_client::{Id, NewTodo, Status, TodoPatch};
+use todo_client::{Id, NewTodo, Status, Todo, TodoPatch};
 
 use crate::config::Keys;
 
@@ -113,6 +113,21 @@ pub(super) struct NoteStats {
     pub(super) total: usize,
 }
 
+/// What a finished server call brings back, applied by [`State::finish`].
+#[derive(Debug)]
+pub(super) enum Loaded {
+    /// Every note path.
+    Notes(Vec<String>),
+    /// This note's todos.
+    Todos(String, Vec<Todo>),
+    /// Every note's counts.
+    Stats(Vec<NoteStats>),
+    /// This todo, as the server now has it.
+    Changed(Todo),
+    /// Put the cursor on this todo.
+    Select(Id),
+}
+
 /// Application state.
 #[derive(Debug)]
 pub(super) struct State {
@@ -138,6 +153,12 @@ pub(super) struct State {
     pub(super) error: Option<String>,
     /// Movement keys from the config.
     pub(super) keys: Keys,
+    /// Server calls still running, by id, with the page each one fills.
+    pub(super) jobs: Vec<(u64, Page)>,
+    /// Id of the next server call.
+    pub(super) next_job: u64,
+    /// Turns the spinner while something loads.
+    pub(super) tick: usize,
 }
 
 impl Default for State {
@@ -154,6 +175,9 @@ impl Default for State {
             stats: Vec::new(),
             error: None,
             keys: Keys::default(),
+            jobs: Vec::new(),
+            next_job: 0,
+            tick: 0,
         }
     }
 }
@@ -166,6 +190,60 @@ impl State {
             self.manager.open(notes.first().cloned());
         }
         self.notes = notes;
+    }
+
+    /// Marks a server call for `action` as running, and returns the id
+    /// to hand to [`Self::finish`] once it's done.
+    pub(super) fn start(&mut self, action: &Action) -> u64 {
+        let page = match action {
+            Action::LoadStats => Page::Stats,
+            Action::Refresh => self.page,
+            _ => Page::Manager,
+        };
+        let id = self.next_job;
+        self.next_job = self.next_job.wrapping_add(1);
+        self.jobs.push((id, page));
+        id
+    }
+
+    /// Applies what call `id` brought back, or shows why it failed.
+    pub(super) fn finish(&mut self, id: u64, result: Result<Vec<Loaded>, String>) {
+        self.jobs.retain(|&(job, _)| job != id);
+        match result {
+            Ok(loaded) => {
+                self.error = None;
+                for loaded in loaded {
+                    self.apply(loaded);
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    /// Puts one result in place.
+    fn apply(&mut self, loaded: Loaded) {
+        match loaded {
+            Loaded::Notes(notes) => self.set_notes(notes),
+            // Dropped if another note was opened meanwhile.
+            Loaded::Todos(note, todos) => {
+                if self.manager.note.as_ref() == Some(&note) {
+                    self.manager.set_todos(todos);
+                }
+            }
+            Loaded::Stats(stats) => self.stats = stats,
+            Loaded::Changed(todo) => self.manager.replace(todo),
+            Loaded::Select(id) => self.manager.select(&id),
+        }
+    }
+
+    /// Whether a server call is still filling `page`.
+    pub(super) fn is_loading(&self, page: Page) -> bool {
+        self.jobs.iter().any(|&(_, of)| of == page)
+    }
+
+    /// Whether any server call is still running.
+    pub(super) fn is_busy(&self) -> bool {
+        !self.jobs.is_empty()
     }
 
     /// Applies a key press, returning the server call it needs, if any.
@@ -474,6 +552,43 @@ mod tests {
         assert_eq!(state.page, Page::About);
         state.on_key(press(KeyCode::Down));
         assert_eq!(state.page, Page::About);
+    }
+
+    #[test]
+    fn stats_page_loads_until_its_call_finishes() {
+        let mut state = with_notes();
+        state.page = Page::Stats;
+        let id = state.start(&Action::LoadStats);
+        assert!(state.is_loading(Page::Stats));
+        assert!(!state.is_loading(Page::Manager));
+        let row = NoteStats {
+            note: "todo.md".into(),
+            done: 1,
+            total: 2,
+        };
+        state.finish(id, Ok(vec![Loaded::Stats(vec![row.clone()])]));
+        assert!(!state.is_busy());
+        assert_eq!(state.stats, vec![row]);
+    }
+
+    #[test]
+    fn a_failed_call_stops_loading_and_shows_why() {
+        let mut state = with_notes();
+        let id = state.start(&Action::LoadTodos);
+        state.finish(id, Err("server is down".into()));
+        assert!(!state.is_busy());
+        assert_eq!(state.error.as_deref(), Some("server is down"));
+    }
+
+    #[test]
+    fn todos_of_a_note_closed_meanwhile_are_dropped() {
+        let mut state = with_notes();
+        let id = state.start(&Action::LoadTodos);
+        state.manager.open(Some("travel/japan.md".into()));
+        let todo = Todo::new(Id("a1".into()), "milk", chrono::NaiveDate::MIN);
+        let todos = Loaded::Todos("projects/todo/main.md".into(), vec![todo]);
+        state.finish(id, Ok(vec![todos]));
+        assert!(state.manager.todos.is_empty());
     }
 
     #[test]
