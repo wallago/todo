@@ -56,6 +56,8 @@ in
         type = settingsFormat.type;
         example = {
           server.port = 3000;
+          # Public HTTPS URL: turns on OAuth for claude.ai connectors (needs tokenFile).
+          server.publicUrl = "https://todo.wallago.xyz";
           vault = {
             root = "/srv/vault";
             inbox = "todo.md";

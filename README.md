@@ -100,3 +100,24 @@ claude mcp add --transport http todo https://todo.wallago.xyz/mcp \
 ```
 
 In Rust: `todo_client::Client::new(url).with_token(&token)`.
+
+### claude.ai connector (OAuth)
+
+claude.ai custom connectors log in with OAuth, not a fixed header.
+Set `[server] public_url` next to `token_file` to turn on a minimal built-in OAuth server:
+
+```toml
+[server]
+token_file = "token"
+public_url = "https://todo.wallago.xyz"
+```
+
+Then in claude.ai: Settings > Connectors > Add custom connector, URL `https://todo.wallago.xyz/mcp`.
+claude.ai opens a login page on the server: paste the server token once and click Allow.
+
+- `public_url` must be the public HTTPS URL claude.ai reaches (it calls from `160.79.104.0/21`), and its host must be in `[mcp] allowed_hosts`.
+- Nothing is stored: codes and tokens are signed with a key derived from the server token.
+  A restart keeps everyone logged in; changing the token logs every OAuth client out.
+- Access tokens last 1 hour, refresh tokens 90 days.
+- The static `Authorization: Bearer <token>` keeps working for the TUI, scripts, and Claude Code.
+- Only Claude's redirect URIs are accepted: `https://claude.ai/api/mcp/auth_callback` and loopback URLs.

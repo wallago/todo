@@ -13,6 +13,11 @@ pub(crate) struct ServerConfig {
     /// File holding the bearer token for `/api` and `/mcp`. Unset: no auth.
     #[serde(alias = "tokenFile")]
     pub(crate) token_file: Option<PathBuf>,
+    /// Public HTTPS URL, e.g. `https://todo.example.com`. Set with
+    /// `token_file`, it turns on OAuth so claude.ai can add `/mcp` as a
+    /// custom connector.
+    #[serde(alias = "publicUrl")]
+    pub(crate) public_url: Option<String>,
 }
 
 // Localhost by default. Set a `token_file` before listening wider.
@@ -22,6 +27,7 @@ impl Default for ServerConfig {
             address: "127.0.0.1".into(),
             port: 3000,
             token_file: None,
+            public_url: None,
         }
     }
 }
@@ -37,6 +43,7 @@ mod tests {
             address = "0.0.0.0"
             port = 3000
             token_file = "/run/agenix/todo-token"
+            publicUrl = "https://todo.example.com"
             "#,
         )
         .expect("failed to deserialize string");
@@ -45,6 +52,10 @@ mod tests {
         assert_eq!(
             config.token_file,
             Some(PathBuf::from("/run/agenix/todo-token"))
+        );
+        assert_eq!(
+            config.public_url.as_deref(),
+            Some("https://todo.example.com")
         );
         let config = toml::from_str::<ServerConfig>("").expect("empty config is valid");
         assert_eq!(config.address, "127.0.0.1");
