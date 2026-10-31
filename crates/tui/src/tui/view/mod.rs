@@ -257,6 +257,19 @@ mod tests {
     }
 
     #[test]
+    fn a_long_title_scrolls_to_show_its_end() {
+        let mut state = with_todos();
+        state.focus = Focus::Page;
+        state.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        for c in "start of a really long title that goes on and on until the end".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let shown = screen(&mut state);
+        assert!(shown.contains("until the end▏"));
+        assert!(!shown.contains("start of"));
+    }
+
+    #[test]
     fn form_lists_tags_with_checkboxes() {
         let mut state = with_todos();
         state.tags = vec!["car".into(), "pet".into()];

@@ -81,8 +81,16 @@ fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
         } else if *field != Field::Title {
             spans.push(Span::styled(" ▾", SECONDARY));
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)).block(block), *row);
+        let width = block.inner(*row).width;
+        frame.render_widget(scrolled_to_end(Line::from(spans), width).block(block), *row);
     }
+}
+
+/// `line` scrolled left just enough that its end, where the cursor is,
+/// fits in `width` columns.
+fn scrolled_to_end(line: Line<'_>, width: u16) -> Paragraph<'_> {
+    let hidden = line.width().saturating_sub(usize::from(width));
+    Paragraph::new(line).scroll((0, u16::try_from(hidden).unwrap_or(u16::MAX)))
 }
 
 /// The field's name, on its box.
@@ -200,7 +208,7 @@ fn tag_list(form: &Form, frame: &mut Frame, rect: Rect) {
         Span::styled(form.tag_input.as_str(), PRIMARY),
         Span::styled("▏", ACCENT),
     ]);
-    frame.render_widget(line, input);
+    frame.render_widget(scrolled_to_end(line, input.width), input);
     if is_new {
         let line = Line::from(vec![
             Span::styled("+ new ", ACCENT),
