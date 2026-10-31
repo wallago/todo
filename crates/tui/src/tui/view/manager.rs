@@ -14,13 +14,22 @@ use crate::tui::{
     theme::{ACCENT, ACCENT_BIS, HIGHLIGHT, PRIMARY, SECONDARY},
 };
 
-/// The open note's todos.
-pub(super) fn render(manager: &mut Manager, focused: bool, frame: &mut Frame, rect: Rect) {
-    let title = manager
+/// The open note's todos, with `spinner` after the title while they reload.
+pub(super) fn render(
+    manager: &mut Manager,
+    spinner: Option<&str>,
+    focused: bool,
+    frame: &mut Frame,
+    rect: Rect,
+) {
+    let mut title = manager
         .note
         .as_deref()
         .map_or("no note", note_name)
         .to_owned();
+    if let Some(spinner) = spinner {
+        title = format!("{title} {spinner}");
+    }
     let todos = list(manager.todos.iter().map(row), pane(&title, focused))
         // Rows colour themselves; the selection only adds a background.
         .highlight_style(Style::new().bg(ACCENT_BIS).bold());

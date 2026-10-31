@@ -12,7 +12,7 @@ use ratatui::{
 
 use super::{
     state::{Focus, Page, State},
-    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, PRIMARY, SECONDARY, UNACCENT},
+    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, HIGHLIGHT, PRIMARY, SECONDARY, UNACCENT},
 };
 
 /// The about page.
@@ -28,14 +28,26 @@ mod picker;
 /// The stats page.
 mod stats;
 
+/// Spinner frames, one per tick.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The spinner frame for `tick`.
+fn spinner(tick: usize) -> &'static str {
+    SPINNER[tick % SPINNER.len()]
+}
+
 /// Renders the whole screen: frame, sidebar, page, popup and key bindings.
 pub(super) fn render(state: &mut State, frame: &mut Frame) {
-    let title = Line::from(vec![
+    let mut title = vec![
         Span::raw(" "),
         Span::styled(concat!(env!("CARGO_PKG_NAME"), " "), ACCENT).bold(),
         Span::styled(concat!("- ", env!("CARGO_PKG_DESCRIPTION")), SECONDARY),
         Span::raw(" "),
-    ]);
+    ];
+    if state.is_busy() {
+        title.push(Span::styled(format!("{} ", spinner(state.tick)), HIGHLIGHT));
+    }
+    let title = Line::from(title);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(ACCENT)
@@ -49,11 +61,16 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
         .areas(frame.area());
     render_sidebar(state, frame, sidebar);
     let focused = state.focus == Focus::Page;
-    if let Some(error) = &state.error {
+    let loading = state.is_loading(state.page).then(|| spinner(state.tick));
+    // The manager keeps its todos on screen while they reload.
+    let blank = state.page == Page::Stats || state.manager.todos.is_empty();
+    if let Some(spinner) = loading.filter(|_| blank) {
+        render_loading(state.page.name(), spinner, focused, frame, page);
+    } else if let Some(error) = &state.error {
         render_error(error, frame, page);
     } else {
         match state.page {
-            Page::Manager => manager::render(&mut state.manager, focused, frame, page),
+            Page::Manager => manager::render(&mut state.manager, loading, focused, frame, page),
             Page::Stats => stats::render(&state.stats, focused, frame, page),
             Page::About => about::render(focused, frame, page),
         }
@@ -107,7 +124,13 @@ fn render_sidebar(state: &State, frame: &mut Frame, rect: Rect) {
     let [navigate, summary] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(rect);
     let pages = list(
-        Page::ALL.iter().map(|page| page.name()),
+        Page::ALL.iter().map(|&page| {
+            let mut row = vec![Span::raw(page.name())];
+            if state.is_loading(page) {
+                row.push(Span::styled(format!(" {}", spinner(state.tick)), HIGHLIGHT));
+            }
+            Line::from(row)
+        }),
         pane("navigate", state.focus == Focus::Sidebar),
     );
     let mut selected = ListState::default().with_selected(Some(state.page.index()));
@@ -140,6 +163,16 @@ fn ratio(done: usize, total: usize) -> f64 {
         done as f64 / total as f64
     };
     ratio.clamp(0.0, 1.0)
+}
+
+/// `⠋ loading…` in place of a page whose data hasn't come yet.
+fn render_loading(title: &str, spinner: &str, focused: bool, frame: &mut Frame, rect: Rect) {
+    let text = Paragraph::new(Line::from(vec![
+        Span::styled(spinner, HIGHLIGHT),
+        Span::styled(" loading…", SECONDARY),
+    ]))
+    .block(pane(title, focused));
+    frame.render_widget(text, rect);
 }
 
 /// The last server error, in place of the page.
@@ -182,7 +215,7 @@ mod tests {
     use todo_client::{Id, Status, Todo};
 
     use super::*;
-    use crate::tui::state::NoteStats;
+    use crate::tui::state::{Action, Loaded, NoteStats};
 
     /// Draws `state` on an 80×24 screen and returns its text, row after row.
     fn screen(state: &mut State) -> String {
@@ -311,6 +344,27 @@ mod tests {
         let screen = screen(&mut state);
         assert!(screen.contains("travel"));
         assert!(screen.contains("1/4"));
+    }
+
+    #[test]
+    fn stats_shows_loading_until_its_data_comes() {
+        let mut state = State {
+            page: Page::Stats,
+            ..State::default()
+        };
+        let id = state.start(&Action::LoadStats, false);
+        let loading = screen(&mut state);
+        assert!(loading.contains("loading…"));
+        assert!(loading.contains(&format!("stats {}", SPINNER[0])));
+        let row = NoteStats {
+            note: "travel.md".into(),
+            done: 1,
+            total: 4,
+        };
+        state.finish(id, Ok(vec![Loaded::Stats(vec![row])]));
+        let loaded = screen(&mut state);
+        assert!(!loaded.contains("loading…"));
+        assert!(loaded.contains("1/4"));
     }
 
     #[test]
