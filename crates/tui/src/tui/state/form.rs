@@ -1,4 +1,4 @@
-//! The add and edit form: title, priority, due date and status.
+//! The add and edit form: title, priority, due date, status and tags.
 
 use chrono::{Days, Months, NaiveDate};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -19,12 +19,19 @@ pub(in crate::tui) enum Field {
     Due,
     /// A dropdown of [`STATUSES`].
     Status,
+    /// Checkboxes of every known tag, filtered by what's typed.
+    Tags,
 }
 
 impl Field {
     /// Every field, in tab order.
-    pub(in crate::tui) const ALL: [Self; 4] =
-        [Self::Title, Self::Priority, Self::Due, Self::Status];
+    pub(in crate::tui) const ALL: [Self; 5] = [
+        Self::Title,
+        Self::Priority,
+        Self::Due,
+        Self::Status,
+        Self::Tags,
+    ];
 
     /// The next (or previous) field, wrapping around.
     fn step(self, forward: bool) -> Self {
@@ -68,13 +75,22 @@ pub(in crate::tui) struct Form {
     pub(in crate::tui) due: Option<NaiveDate>,
     /// Checkbox state.
     pub(in crate::tui) status: Status,
+    /// Ticked tags, without the leading `#`, in the order they were ticked.
+    pub(in crate::tui) tags: Vec<String>,
+    /// Every tag used in the vault, sorted, plus any made here.
+    pub(in crate::tui) known_tags: Vec<String>,
+    /// What's typed in the tags field: filters the list, or names a new tag.
+    pub(in crate::tui) tag_input: String,
+    /// Highlighted row of [`Self::tag_matches`].
+    pub(in crate::tui) tag_cursor: usize,
     /// Where the calendar starts when there's no due date.
     pub(in crate::tui) today: NaiveDate,
 }
 
 impl Form {
-    /// An empty form for a new todo.
-    pub(in crate::tui) fn new(today: NaiveDate) -> Self {
+    /// An empty form for a new todo; `known_tags` are offered in the tags
+    /// field.
+    pub(in crate::tui) fn new(today: NaiveDate, known_tags: Vec<String>) -> Self {
         Self {
             original: None,
             field: Field::Title,
@@ -82,20 +98,59 @@ impl Form {
             priority: Priority::Normal,
             due: None,
             status: Status::Todo,
+            tags: Vec::new(),
+            known_tags,
+            tag_input: String::new(),
+            tag_cursor: 0,
             today,
         }
     }
 
     /// A form filled from `todo`, to edit it.
-    pub(in crate::tui) fn edit(todo: &Todo, today: NaiveDate) -> Self {
+    pub(in crate::tui) fn edit(todo: &Todo, today: NaiveDate, known_tags: Vec<String>) -> Self {
         Self {
             original: Some(todo.clone()),
-            field: Field::Title,
             title: todo.text.clone(),
             priority: todo.priority,
             due: todo.due,
             status: todo.status,
-            today,
+            tags: todo.tags.clone(),
+            ..Self::new(today, known_tags)
+        }
+    }
+
+    /// Known tags containing what's typed, ignoring case.
+    pub(in crate::tui) fn tag_matches(&self) -> Vec<&String> {
+        let query = self.tag_input.to_lowercase();
+        self.known_tags
+            .iter()
+            .filter(|tag| tag.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// Ticks `tag`, or unticks it if it was ticked.
+    fn toggle_tag(&mut self, tag: String) {
+        if let Some(at) = self.tags.iter().position(|t| *t == tag) {
+            self.tags.remove(at);
+        } else {
+            self.tags.push(tag);
+        }
+    }
+
+    /// Ticks the typed tag, making it known if it's new, and clears the input.
+    fn add_typed_tag(&mut self) {
+        let tag = self.tag_input.trim().trim_start_matches('#').to_owned();
+        self.tag_input.clear();
+        self.tag_cursor = 0;
+        if tag.is_empty() {
+            return;
+        }
+        if !self.known_tags.contains(&tag) {
+            self.known_tags.push(tag.clone());
+            self.known_tags.sort();
+        }
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
         }
     }
 
@@ -104,11 +159,15 @@ impl Form {
         self.original.is_some()
     }
 
-    /// Applies a key. `tab` moves between fields, `enter` saves, `esc`
-    /// cancels; the rest goes to the focused field.
+    /// Applies a key. `tab` moves between fields, `enter` saves (or, with
+    /// a tag typed, adds that tag), `esc` cancels; the rest goes to the
+    /// focused field.
     pub(in crate::tui) fn on_key(&mut self, key: KeyEvent, keys: Keys) -> Outcome {
         match key.code {
             KeyCode::Esc => return Outcome::Cancel,
+            KeyCode::Enter if self.field == Field::Tags && !self.tag_input.trim().is_empty() => {
+                self.add_typed_tag();
+            }
             KeyCode::Enter if self.title.trim().is_empty() => return Outcome::Open,
             KeyCode::Enter => return Outcome::Submit,
             KeyCode::Tab => self.field = self.field.step(true),
@@ -118,11 +177,11 @@ impl Form {
         Outcome::Open
     }
 
-    /// A key for the focused field. Letters type in the title; elsewhere
-    /// the movement keys from `keys` work like arrows.
+    /// A key for the focused field. Letters type in the title and tags;
+    /// elsewhere the movement keys from `keys` work like arrows.
     fn on_field_key(&mut self, code: KeyCode, keys: Keys) {
         let arrow = match code {
-            KeyCode::Char(c) if self.field != Field::Title => {
+            KeyCode::Char(c) if !matches!(self.field, Field::Title | Field::Tags) => {
                 if c == keys.up {
                     KeyCode::Up
                 } else if c == keys.down {
@@ -147,6 +206,25 @@ impl Form {
             }
             (Field::Status, KeyCode::Up | KeyCode::Down) => {
                 self.status = pick(&STATUSES, self.status, arrow == KeyCode::Down);
+            }
+            (Field::Tags, KeyCode::Char(' ')) => {
+                let tag = self.tag_matches().get(self.tag_cursor).map(|&t| t.clone());
+                if let Some(tag) = tag {
+                    self.toggle_tag(tag);
+                }
+            }
+            (Field::Tags, KeyCode::Char(c)) => {
+                self.tag_input.push(c);
+                self.tag_cursor = 0;
+            }
+            (Field::Tags, KeyCode::Backspace) => {
+                self.tag_input.pop();
+                self.tag_cursor = 0;
+            }
+            (Field::Tags, KeyCode::Up) => self.tag_cursor = self.tag_cursor.saturating_sub(1),
+            (Field::Tags, KeyCode::Down) => {
+                let last = self.tag_matches().len().saturating_sub(1);
+                self.tag_cursor = self.tag_cursor.saturating_add(1).min(last);
             }
             (Field::Due, KeyCode::Backspace | KeyCode::Delete) => self.due = None,
             (Field::Due, KeyCode::Char('t')) => self.due = Some(self.today),
@@ -181,6 +259,7 @@ impl Form {
                 text: title,
                 priority: self.priority,
                 due: self.due,
+                tags: self.tags,
                 ..NewTodo::default()
             };
             return Some(Action::Add(new, self.status));
@@ -191,7 +270,7 @@ impl Form {
             priority: (self.priority != old.priority).then_some(self.priority),
             due: (self.due != old.due).then_some(self.due),
             status: (self.status != old.status).then_some(self.status),
-            ..TodoPatch::default()
+            tags: (self.tags != old.tags).then_some(self.tags),
         };
         (patch != TodoPatch::default()).then_some(Action::Change(old.id, patch))
     }
@@ -243,9 +322,14 @@ mod tests {
         }
     }
 
+    /// Tags already used somewhere in the vault.
+    fn known() -> Vec<String> {
+        vec!["home".into(), "shop".into(), "work".into()]
+    }
+
     #[test]
     fn new_todo_with_every_field() {
-        let mut form = Form::new(today());
+        let mut form = Form::new(today(), known());
         type_text(&mut form, "pine trees");
         press(&mut form, KeyCode::Tab);
         // Up the dropdown: normal -> medium -> high.
@@ -255,11 +339,19 @@ mod tests {
         type_text(&mut form, "eeo");
         press(&mut form, KeyCode::Tab);
         type_text(&mut form, "e");
+        press(&mut form, KeyCode::Tab);
+        // Tick `work` by filtering, then make a new `garden` tag.
+        type_text(&mut form, "wo ");
+        press(&mut form, KeyCode::Backspace);
+        press(&mut form, KeyCode::Backspace);
+        type_text(&mut form, "#garden");
+        assert_eq!(press(&mut form, KeyCode::Enter), Outcome::Open);
         assert_eq!(press(&mut form, KeyCode::Enter), Outcome::Submit);
         let new = NewTodo {
             text: "pine trees".into(),
             priority: Priority::High,
             due: NaiveDate::from_ymd_opt(2026, 11, 7),
+            tags: vec!["work".into(), "garden".into()],
             ..NewTodo::default()
         };
         assert_eq!(form.action(), Some(Action::Add(new, Status::InProgress)));
@@ -267,7 +359,7 @@ mod tests {
 
     #[test]
     fn enter_needs_a_title() {
-        let mut form = Form::new(today());
+        let mut form = Form::new(today(), Vec::new());
         type_text(&mut form, "  ");
         assert_eq!(press(&mut form, KeyCode::Enter), Outcome::Open);
         assert_eq!(press(&mut form, KeyCode::Esc), Outcome::Cancel);
@@ -275,7 +367,7 @@ mod tests {
 
     #[test]
     fn due_can_be_cleared_or_set_to_today() {
-        let mut form = Form::new(today());
+        let mut form = Form::new(today(), Vec::new());
         form.field = Field::Due;
         press(&mut form, KeyCode::PageDown);
         press(&mut form, KeyCode::PageDown);
@@ -290,7 +382,7 @@ mod tests {
     fn edit_sends_only_what_changed() {
         let mut todo = Todo::new(Id("a1".into()), "milk", today());
         todo.status = Status::Done;
-        let mut form = Form::edit(&todo, today());
+        let mut form = Form::edit(&todo, today(), known());
         assert_eq!(form.clone().action(), None);
         type_text(&mut form, "!");
         form.field = Field::Priority;
@@ -305,7 +397,9 @@ mod tests {
 
     #[test]
     fn dropdowns_stop_at_the_ends_and_tab_wraps() {
-        let mut form = Form::new(today());
+        let mut form = Form::new(today(), Vec::new());
+        press(&mut form, KeyCode::BackTab);
+        assert_eq!(form.field, Field::Tags);
         press(&mut form, KeyCode::BackTab);
         assert_eq!(form.field, Field::Status);
         for _ in 0..9 {
@@ -313,6 +407,57 @@ mod tests {
         }
         assert_eq!(form.status, Status::Cancelled);
         press(&mut form, KeyCode::Tab);
+        press(&mut form, KeyCode::Tab);
         assert_eq!(form.field, Field::Title);
+    }
+
+    #[test]
+    fn tags_tick_untick_and_filter() {
+        let mut form = Form::new(today(), known());
+        form.field = Field::Tags;
+        // Letters type here instead of moving: `e` is down in these keys.
+        type_text(&mut form, "e");
+        assert_eq!(form.tag_matches(), [&"home".to_owned()]);
+        press(&mut form, KeyCode::Char(' '));
+        assert_eq!(form.tags, ["home"]);
+        press(&mut form, KeyCode::Backspace);
+        assert_eq!(form.tag_matches().len(), 3);
+        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Down] {
+            press(&mut form, code);
+        }
+        press(&mut form, KeyCode::Char(' '));
+        press(&mut form, KeyCode::Up);
+        press(&mut form, KeyCode::Char(' '));
+        press(&mut form, KeyCode::Up);
+        press(&mut form, KeyCode::Char(' '));
+        assert_eq!(form.tags, ["work", "shop"]);
+    }
+
+    #[test]
+    fn a_new_tag_is_known_and_ticked_once() {
+        let mut form = Form::new(today(), known());
+        form.field = Field::Tags;
+        type_text(&mut form, "#car");
+        press(&mut form, KeyCode::Enter);
+        type_text(&mut form, "car");
+        press(&mut form, KeyCode::Enter);
+        assert_eq!(form.tags, ["car"]);
+        assert_eq!(form.known_tags, ["car", "home", "shop", "work"]);
+        assert_eq!(form.tag_input, "");
+    }
+
+    #[test]
+    fn edit_sends_new_tags() {
+        let mut todo = Todo::new(Id("a1".into()), "milk", today());
+        todo.tags = vec!["shop".into()];
+        let mut form = Form::edit(&todo, today(), known());
+        assert_eq!(form.tags, ["shop"]);
+        form.field = Field::Tags;
+        type_text(&mut form, "home ");
+        let patch = TodoPatch {
+            tags: Some(vec!["shop".into(), "home".into()]),
+            ..TodoPatch::default()
+        };
+        assert_eq!(form.action(), Some(Action::Change(Id("a1".into()), patch)));
     }
 }

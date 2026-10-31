@@ -257,6 +257,24 @@ mod tests {
     }
 
     #[test]
+    fn form_lists_tags_with_checkboxes() {
+        let mut state = with_todos();
+        state.tags = vec!["car".into(), "pet".into()];
+        state.focus = Focus::Page;
+        let press = |state: &mut State, code| state.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        press(&mut state, KeyCode::Char('a'));
+        press(&mut state, KeyCode::BackTab);
+        press(&mut state, KeyCode::Char(' '));
+        let shown = screen(&mut state);
+        assert!(shown.contains("╭ tags ─"));
+        assert!(shown.contains("[x] #car"));
+        assert!(shown.contains("[ ] #pet"));
+        assert!(shown.contains("│ #car"));
+        press(&mut state, KeyCode::Char('z'));
+        assert!(screen(&mut state).contains("+ new #z"));
+    }
+
+    #[test]
     fn picker_offers_a_new_note_when_nothing_matches() {
         let mut state = with_todos();
         state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));

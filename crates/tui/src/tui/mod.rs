@@ -74,6 +74,7 @@ async fn load(client: &Client, state: &mut State, action: Action) -> todo_client
     match action {
         Action::Refresh => {
             state.set_notes(client.notes().await?);
+            state.set_tags(&client.list().await?);
             if state.page == Page::Stats {
                 load_stats(client, state).await?;
             }
@@ -115,6 +116,7 @@ async fn load(client: &Client, state: &mut State, action: Action) -> todo_client
         }
         Action::Change(id, patch) => {
             let changed = client.update(&id, &patch).await?;
+            state.learn_tags(std::slice::from_ref(&changed));
             state.manager.replace(changed);
             Ok(())
         }
@@ -131,6 +133,7 @@ async fn load_todos(client: &Client, state: &mut State) -> todo_client::Result<(
         Some(note) => client.list_note(note).await?,
         None => Vec::new(),
     };
+    state.learn_tags(&todos);
     state.manager.set_todos(todos);
     Ok(())
 }
