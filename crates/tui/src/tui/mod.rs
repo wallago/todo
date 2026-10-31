@@ -125,6 +125,7 @@ async fn load(client: &Client, job: Job, action: Action) -> todo_client::Result<
                 loaded.push(load_stats(client, &notes).await?);
             }
             loaded.push(Loaded::Notes(notes));
+            loaded.push(Loaded::Tags(client.list().await?));
             loaded.extend(load_todos(client, note).await?);
         }
         Action::LoadTodos => loaded.extend(load_todos(client, job.note).await?),

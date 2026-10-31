@@ -122,6 +122,8 @@ pub(super) enum Loaded {
     Todos(String, Vec<Todo>),
     /// Every note's counts.
     Stats(Vec<NoteStats>),
+    /// Every todo in the vault, for its tags.
+    Tags(Vec<Todo>),
     /// This todo, as the server now has it.
     Changed(Todo),
     /// Put the cursor on this todo.
@@ -153,6 +155,8 @@ pub(super) struct State {
     pub(super) error: Option<String>,
     /// Movement keys from the config.
     pub(super) keys: Keys,
+    /// Every tag in the vault, sorted, offered in the form.
+    pub(super) tags: Vec<String>,
     /// Server calls still running, by id, with the page each one fills.
     pub(super) jobs: Vec<(u64, Page)>,
     /// Id of the next server call.
@@ -175,6 +179,7 @@ impl Default for State {
             stats: Vec::new(),
             error: None,
             keys: Keys::default(),
+            tags: Vec::new(),
             jobs: Vec::new(),
             next_job: 0,
             tick: 0,
@@ -190,6 +195,20 @@ impl State {
             self.manager.open(notes.first().cloned());
         }
         self.notes = notes;
+    }
+
+    /// Replaces the known tags with those of `todos`, every todo in the vault.
+    pub(super) fn set_tags(&mut self, todos: &[Todo]) {
+        self.tags.clear();
+        self.learn_tags(todos);
+    }
+
+    /// Adds the tags of `todos` to the known ones.
+    pub(super) fn learn_tags(&mut self, todos: &[Todo]) {
+        self.tags
+            .extend(todos.iter().flat_map(|todo| todo.tags.iter().cloned()));
+        self.tags.sort();
+        self.tags.dedup();
     }
 
     /// Marks a server call for `action` as running, and returns the id
@@ -226,12 +245,17 @@ impl State {
             Loaded::Notes(notes) => self.set_notes(notes),
             // Dropped if another note was opened meanwhile.
             Loaded::Todos(note, todos) => {
+                self.learn_tags(&todos);
                 if self.manager.note.as_ref() == Some(&note) {
                     self.manager.set_todos(todos);
                 }
             }
             Loaded::Stats(stats) => self.stats = stats,
-            Loaded::Changed(todo) => self.manager.replace(todo),
+            Loaded::Tags(todos) => self.set_tags(&todos),
+            Loaded::Changed(todo) => {
+                self.learn_tags(std::slice::from_ref(&todo));
+                self.manager.replace(todo);
+            }
             Loaded::Select(id) => self.manager.select(&id),
         }
     }
@@ -268,7 +292,7 @@ impl State {
                     note.map(|note| {
                         // A new note has no file until its first todo: ask for it.
                         if !self.notes.contains(&note) {
-                            self.form = Some(Form::new(today()));
+                            self.form = Some(Form::new(today(), self.tags.clone()));
                         }
                         self.manager.open(Some(note));
                         Action::LoadTodos
@@ -332,13 +356,13 @@ impl State {
                 return Some(Action::Toggle);
             }
             (_, Page::Manager, KeyCode::Char('a')) if self.manager.note.is_some() => {
-                self.form = Some(Form::new(today()));
+                self.form = Some(Form::new(today(), self.tags.clone()));
             }
             (_, Page::Manager, KeyCode::Char('c')) => {
                 self.form = self
                     .manager
                     .selected()
-                    .map(|todo| Form::edit(todo, today()));
+                    .map(|todo| Form::edit(todo, today(), self.tags.clone()));
             }
             (_, Page::Manager, KeyCode::Char('d')) => {
                 self.confirm = self.manager.selected().map(|todo| Confirm {
@@ -356,6 +380,13 @@ impl State {
         if let Some(form) = &self.form {
             return match form.field {
                 Field::Title => &[("tab", "next"), ("enter", "save"), ("esc", "cancel")],
+                Field::Tags => &[
+                    ("type", "filter"),
+                    ("↑↓", "move"),
+                    ("space", "tick"),
+                    ("enter", "new tag or save"),
+                    ("tab", "next"),
+                ],
                 Field::Due => &[
                     ("arrows", "day"),
                     ("pgup/dn", "month"),
