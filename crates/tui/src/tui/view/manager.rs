@@ -44,5 +44,8 @@ fn row(todo: &Todo) -> Line<'_> {
     if let Some(due) = todo.due {
         spans.push(Span::styled(format!(" {due}"), HIGHLIGHT));
     }
+    for tag in &todo.tags {
+        spans.push(Span::styled(format!(" #{tag}"), text));
+    }
     Line::from(spans)
 }
