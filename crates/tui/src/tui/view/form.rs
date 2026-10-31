@@ -1,5 +1,5 @@
 //! The add and edit form: fields on the left, the focused field's
-//! dropdown or calendar on the right.
+//! dropdown, calendar or tag list on the right.
 
 use chrono::{Datelike, Days, NaiveDate};
 use ratatui::{
@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, ListState, Padding, Paragraph},
+    widgets::{Block, BorderType, Clear, ListItem, ListState, Padding, Paragraph},
 };
 use todo_client::{Priority, Status};
 
@@ -19,7 +19,7 @@ use crate::tui::{
 
 /// The whole form, centred over the page.
 pub(super) fn render(form: &Form, frame: &mut Frame, page: Rect) {
-    let area = page.centered(Constraint::Max(70), Constraint::Length(15));
+    let area = page.centered(Constraint::Max(70), Constraint::Length(18));
     frame.render_widget(Clear, area);
     let title = if form.is_edit() {
         "edit todo"
@@ -46,12 +46,13 @@ pub(super) fn render(form: &Form, frame: &mut Frame, page: Rect) {
             let names = STATUSES.iter().map(|&s| status_name(s));
             dropdown(names, at, frame, side);
         }
+        Field::Tags => tag_list(form, frame, side),
     }
 }
 
 /// One rounded box per field, titled with its name, lit while focused.
 fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
-    let rows = Layout::vertical([Constraint::Length(3); 4]).split(rect);
+    let rows = Layout::vertical([Constraint::Length(3); 5]).split(rect);
     let due = form
         .due
         .map_or_else(|| "none".to_owned(), |due| due.to_string());
@@ -60,6 +61,7 @@ fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
         priority_name(form.priority),
         due,
         status_name(form.status),
+        tag_names(&form.tags),
     ];
     for ((field, value), row) in Field::ALL.iter().zip(values).zip(rows.iter()) {
         let focused = *field == form.field;
@@ -79,8 +81,16 @@ fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
         } else if *field != Field::Title {
             spans.push(Span::styled(" ▾", SECONDARY));
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)).block(block), *row);
+        let width = block.inner(*row).width;
+        frame.render_widget(scrolled_to_end(Line::from(spans), width).block(block), *row);
     }
+}
+
+/// `line` scrolled left just enough that its end, where the cursor is,
+/// fits in `width` columns.
+fn scrolled_to_end(line: Line<'_>, width: u16) -> Paragraph<'_> {
+    let hidden = line.width().saturating_sub(usize::from(width));
+    Paragraph::new(line).scroll((0, u16::try_from(hidden).unwrap_or(u16::MAX)))
 }
 
 /// The field's name, on its box.
@@ -90,7 +100,19 @@ fn label(field: Field) -> &'static str {
         Field::Priority => "priority",
         Field::Due => "due",
         Field::Status => "status",
+        Field::Tags => "tags",
     }
+}
+
+/// `#work #home`, or `none`.
+fn tag_names(tags: &[String]) -> String {
+    if tags.is_empty() {
+        return "none".to_owned();
+    }
+    tags.iter()
+        .map(|tag| format!("#{tag}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `⏫ high`, or plain `normal`.
@@ -164,4 +186,44 @@ fn calendar(day: NaiveDate, form: &Form, frame: &mut Frame, rect: Rect) {
         lines.push(Line::from(Span::styled("no due date", ACCENT_BIS)));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The typed filter, a hint when it names a new tag, then a checkbox per
+/// matching tag.
+fn tag_list(form: &Form, frame: &mut Frame, rect: Rect) {
+    let block = pane("tags", true);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let shown = form.tag_matches();
+    let typed = form.tag_input.trim().trim_start_matches('#');
+    let is_new = !typed.is_empty() && !shown.iter().any(|tag| tag.as_str() == typed);
+    let [input, hint, rows] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(u16::from(is_new)),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    let line = Line::from(vec![
+        Span::styled("> ", ACCENT),
+        Span::styled(form.tag_input.as_str(), PRIMARY),
+        Span::styled("▏", ACCENT),
+    ]);
+    frame.render_widget(scrolled_to_end(line, input.width), input);
+    if is_new {
+        let line = Line::from(vec![
+            Span::styled("+ new ", ACCENT),
+            Span::styled(format!("#{typed}"), PRIMARY),
+        ]);
+        frame.render_widget(line, hint);
+    }
+    let items = shown.iter().map(|tag| {
+        let mark = if form.tags.contains(tag) {
+            "[x]"
+        } else {
+            "[ ]"
+        };
+        ListItem::new(format!("{mark} #{tag}"))
+    });
+    let mut selected = ListState::default().with_selected(Some(form.tag_cursor));
+    frame.render_stateful_widget(list(items, Block::new()), rows, &mut selected);
 }
