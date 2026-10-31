@@ -14,6 +14,8 @@ mod api_error;
 mod auth;
 /// `/mcp`.
 mod mcp;
+/// OAuth login for claude.ai connectors.
+mod oauth;
 /// `/api/todos`.
 mod todos;
 
@@ -23,18 +25,29 @@ async fn health() -> StatusCode {
 }
 
 /// Global server routes. With a `token`, `/api` and `/mcp` need it.
-fn routes(state: AppState, mcp_config: &McpConfig, token: Option<auth::Token>) -> Router {
+/// With a `public_url` too, they also take OAuth access tokens.
+fn routes(
+    state: AppState,
+    mcp_config: &McpConfig,
+    token: Option<auth::Token>,
+    public_url: Option<&str>,
+) -> Router {
     let protected = Router::new()
         .merge(todos::routes())
         .nest_service("/mcp", mcp::service(state.clone(), mcp_config));
+    let mut router = Router::new().route("/health", get(health));
     let protected = match token {
-        Some(token) => protected.layer(middleware::from_fn_with_state(token, auth::require)),
+        Some(token) => {
+            let oauth = public_url.map(|url| oauth::Issuer::new(url, token.clone()));
+            if let Some(issuer) = &oauth {
+                router = router.merge(oauth::routes(issuer.clone()));
+            }
+            let guard = auth::Guard { token, oauth };
+            protected.layer(middleware::from_fn_with_state(guard, auth::require))
+        }
         None => protected,
     };
-    Router::new()
-        .route("/health", get(health))
-        .merge(protected)
-        .with_state(state)
+    router.merge(protected).with_state(state)
 }
 
 /// Start web services. Returns on Ctrl-C or SIGTERM (systemd stop).
@@ -50,13 +63,21 @@ pub(super) async fn start(
         .transpose()?;
     if token.is_none() {
         tracing::warn!("no `token_file`: /api and /mcp are open to anyone who can reach them");
+        if config.public_url.is_some() {
+            return Err(Error::Config(
+                "`public_url` turns on OAuth, which needs a `token_file`".to_owned(),
+            ));
+        }
     }
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", config.address, config.port)).await?;
     tracing::info!("Server running on {}", listener.local_addr()?);
-    serve(listener, routes(state, mcp_config, token))
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    serve(
+        listener,
+        routes(state, mcp_config, token, config.public_url.as_deref()),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await?;
     Ok(())
 }
 
@@ -90,12 +111,27 @@ fn test_app(note: &str) -> (tempfile::TempDir, Router) {
 /// Same as [`test_app`], with this token.
 #[cfg(test)]
 fn test_router(note: &str, token: Option<auth::Token>) -> (tempfile::TempDir, Router) {
+    test_router_with(note, token, None)
+}
+
+/// Same as [`test_router`], with OAuth at `public_url`.
+#[cfg(test)]
+fn test_router_with(
+    note: &str,
+    token: Option<auth::Token>,
+    public_url: Option<&str>,
+) -> (tempfile::TempDir, Router) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("todo.md"), note).expect("write note");
     let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
     (
         dir,
-        routes(AppState::new(store), &McpConfig::default(), token),
+        routes(
+            AppState::new(store),
+            &McpConfig::default(),
+            token,
+            public_url,
+        ),
     )
 }
 

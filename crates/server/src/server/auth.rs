@@ -13,6 +13,7 @@ use axum::{
 use subtle::ConstantTimeEq;
 
 use super::api_error::ApiError;
+use super::oauth::Issuer;
 use crate::prelude::*;
 
 /// The token every protected request must send.
@@ -31,8 +32,19 @@ impl Token {
         Ok(Self(token.into()))
     }
 
+    /// A token from a string, for tests.
+    #[cfg(test)]
+    pub(super) fn from_static(token: &str) -> Self {
+        Self(token.into())
+    }
+
+    /// The raw token bytes, to derive keys from.
+    pub(super) fn secret(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
     /// `true` if `sent` is the token. Takes the same time wherever they differ.
-    fn matches(&self, sent: &str) -> bool {
+    pub(super) fn matches(&self, sent: &str) -> bool {
         self.0.as_bytes().ct_eq(sent.as_bytes()).into()
     }
 }
@@ -44,8 +56,19 @@ impl fmt::Debug for Token {
     }
 }
 
-/// Middleware: 401 unless the request sends `Authorization: Bearer <token>`.
-pub(super) async fn require(State(token): State<Token>, request: Request, next: Next) -> Response {
+/// What protected routes accept: the static token, and OAuth access tokens
+/// when OAuth is on.
+#[derive(Clone)]
+pub(super) struct Guard {
+    /// The static token.
+    pub(super) token: Token,
+    /// Issues and checks OAuth access tokens.
+    pub(super) oauth: Option<Issuer>,
+}
+
+/// Middleware: 401 unless the request sends `Authorization: Bearer <token>`,
+/// with the static token or an OAuth access token.
+pub(super) async fn require(State(guard): State<Guard>, request: Request, next: Next) -> Response {
     let sent = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -53,11 +76,26 @@ pub(super) async fn require(State(token): State<Token>, request: Request, next: 
         .and_then(|value| value.split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, sent)| sent.trim());
-    if sent.is_some_and(|sent| token.matches(sent)) {
+    let accepted = sent.is_some_and(|sent| {
+        guard.token.matches(sent)
+            || guard
+                .oauth
+                .as_ref()
+                .is_some_and(|oauth| oauth.accepts(sent))
+    });
+    if accepted {
         return next.run(request).await;
     }
+    // With OAuth on, point clients such as claude.ai to the login (RFC 9728).
+    let challenge = match &guard.oauth {
+        Some(oauth) => format!(
+            "Bearer resource_metadata=\"{}\"",
+            oauth.resource_metadata_url()
+        ),
+        None => "Bearer".to_owned(),
+    };
     (
-        [(header::WWW_AUTHENTICATE, "Bearer")],
+        [(header::WWW_AUTHENTICATE, challenge)],
         ApiError::unauthorized(),
     )
         .into_response()
@@ -75,7 +113,7 @@ mod tests {
 
     /// A router whose token is `secret`.
     fn app() -> (tempfile::TempDir, axum::Router) {
-        test_router("- [ ] a ^aaaaaa\n", Some(Token("secret".into())))
+        test_router("- [ ] a ^aaaaaa\n", Some(Token::from_static("secret")))
     }
 
     /// GETs `uri` with this `Authorization` header, if any.
