@@ -352,7 +352,7 @@ mod tests {
             page: Page::Stats,
             ..State::default()
         };
-        let id = state.start(&Action::LoadStats);
+        let id = state.start(&Action::LoadStats, false);
         let loading = screen(&mut state);
         assert!(loading.contains("loading…"));
         assert!(loading.contains(&format!("stats {}", SPINNER[0])));

@@ -157,8 +157,9 @@ pub(super) struct State {
     pub(super) keys: Keys,
     /// Every tag in the vault, sorted, offered in the form.
     pub(super) tags: Vec<String>,
-    /// Server calls still running, by id, with the page each one fills.
-    pub(super) jobs: Vec<(u64, Page)>,
+    /// Server calls still running, by id, with the page each one fills
+    /// (none for a quiet one).
+    pub(super) jobs: Vec<(u64, Option<Page>)>,
     /// Id of the next server call.
     pub(super) next_job: u64,
     /// Turns the spinner while something loads.
@@ -212,12 +213,14 @@ impl State {
     }
 
     /// Marks a server call for `action` as running, and returns the id
-    /// to hand to [`Self::finish`] once it's done.
-    pub(super) fn start(&mut self, action: &Action) -> u64 {
+    /// to hand to [`Self::finish`] once it's done. A `quiet` one shows no
+    /// spinner and leaves its page on screen.
+    pub(super) fn start(&mut self, action: &Action, quiet: bool) -> u64 {
         let page = match action {
-            Action::LoadStats => Page::Stats,
-            Action::Refresh => self.page,
-            _ => Page::Manager,
+            _ if quiet => None,
+            Action::LoadStats => Some(Page::Stats),
+            Action::Refresh => Some(self.page),
+            _ => Some(Page::Manager),
         };
         let id = self.next_job;
         self.next_job = self.next_job.wrapping_add(1);
@@ -262,12 +265,17 @@ impl State {
 
     /// Whether a server call is still filling `page`.
     pub(super) fn is_loading(&self, page: Page) -> bool {
-        self.jobs.iter().any(|&(_, of)| of == page)
+        self.jobs.iter().any(|&(_, of)| of == Some(page))
     }
 
-    /// Whether any server call is still running.
+    /// Whether a server call with a spinner is still running.
     pub(super) fn is_busy(&self) -> bool {
-        !self.jobs.is_empty()
+        self.jobs.iter().any(|(_, page)| page.is_some())
+    }
+
+    /// Whether no server call at all is running.
+    pub(super) fn is_idle(&self) -> bool {
+        self.jobs.is_empty()
     }
 
     /// Applies a key press, returning the server call it needs, if any.
@@ -589,7 +597,7 @@ mod tests {
     fn stats_page_loads_until_its_call_finishes() {
         let mut state = with_notes();
         state.page = Page::Stats;
-        let id = state.start(&Action::LoadStats);
+        let id = state.start(&Action::LoadStats, false);
         assert!(state.is_loading(Page::Stats));
         assert!(!state.is_loading(Page::Manager));
         let row = NoteStats {
@@ -603,9 +611,21 @@ mod tests {
     }
 
     #[test]
+    fn a_quiet_refresh_shows_no_spinner() {
+        let mut state = with_notes();
+        state.page = Page::Stats;
+        let id = state.start(&Action::Refresh, true);
+        assert!(!state.is_busy());
+        assert!(!state.is_loading(Page::Stats));
+        assert!(!state.is_idle());
+        state.finish(id, Ok(Vec::new()));
+        assert!(state.is_idle());
+    }
+
+    #[test]
     fn a_failed_call_stops_loading_and_shows_why() {
         let mut state = with_notes();
-        let id = state.start(&Action::LoadTodos);
+        let id = state.start(&Action::LoadTodos, false);
         state.finish(id, Err("server is down".into()));
         assert!(!state.is_busy());
         assert_eq!(state.error.as_deref(), Some("server is down"));
@@ -614,7 +634,7 @@ mod tests {
     #[test]
     fn todos_of_a_note_closed_meanwhile_are_dropped() {
         let mut state = with_notes();
-        let id = state.start(&Action::LoadTodos);
+        let id = state.start(&Action::LoadTodos, false);
         state.manager.open(Some("travel/japan.md".into()));
         let todo = Todo::new(Id("a1".into()), "milk", chrono::NaiveDate::MIN);
         let todos = Loaded::Todos("projects/todo/main.md".into(), vec![todo]);

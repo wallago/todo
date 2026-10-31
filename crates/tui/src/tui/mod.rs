@@ -6,7 +6,7 @@ use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use todo_client::{Client, Status, Todo, TodoPatch};
 use tokio::{
     sync::mpsc::{self, UnboundedSender},
-    time::{self, MissedTickBehavior},
+    time::{self, Instant, MissedTickBehavior},
 };
 
 use crate::{config::Keys, prelude::*};
@@ -32,6 +32,8 @@ impl Drop for Restore {
 
 /// How often the spinner turns while something loads.
 const TICK: Duration = Duration::from_millis(100);
+/// How often the notes and the open page reload on their own.
+const AUTO_REFRESH: Duration = Duration::from_secs(30);
 
 /// What a server call sends back to the event loop: its id and result.
 type Done = (u64, std::result::Result<Vec<Loaded>, String>);
@@ -50,18 +52,20 @@ pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
     let (done_tx, mut done) = mpsc::unbounded_channel();
     let mut ticks = time::interval(TICK);
     ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut refresh = time::interval_at(Instant::now() + AUTO_REFRESH, AUTO_REFRESH);
+    refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut state = State {
         keys,
         ..State::default()
     };
-    spawn(client, &mut state, Action::Refresh, &done_tx);
+    spawn(client, &mut state, Action::Refresh, false, &done_tx);
     while state.running {
         terminal.draw(|frame| view::render(&mut state, frame))?;
         tokio::select! {
             event = events.recv() => match event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                     if let Some(action) = state.on_key(key) {
-                        spawn(client, &mut state, action, &done_tx);
+                        spawn(client, &mut state, action, false, &done_tx);
                     }
                 }
                 // Anything else (resize, focus, ...) just redraws.
@@ -71,16 +75,27 @@ pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
             },
             Some((id, result)) = done.recv() => state.finish(id, result),
             _ = ticks.tick(), if state.is_busy() => state.tick = state.tick.wrapping_add(1),
+            // Quiet, and skipped while another call runs, so a slow server
+            // doesn't pile them up.
+            _ = refresh.tick(), if state.is_idle() => {
+                spawn(client, &mut state, Action::Refresh, true, &done_tx);
+            }
         }
     }
     Ok(())
 }
 
 /// Runs `action` against the server on its own task, the result coming
-/// back through `done`. A failure is shown, not returned, so a server
-/// that's down doesn't close the app.
-fn spawn(client: &Client, state: &mut State, action: Action, done: &UnboundedSender<Done>) {
-    let id = state.start(&action);
+/// back through `done`; a `quiet` one shows no spinner. A failure is
+/// shown, not returned, so a server that's down doesn't close the app.
+fn spawn(
+    client: &Client,
+    state: &mut State,
+    action: Action,
+    quiet: bool,
+    done: &UnboundedSender<Done>,
+) {
+    let id = state.start(&action, quiet);
     let job = Job {
         note: state.manager.note.clone(),
         notes: state.notes.clone(),
