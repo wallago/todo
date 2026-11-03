@@ -4,12 +4,12 @@ use std::cmp::Reverse;
 
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::State,
     response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use todo_client::{Id, Priority, Todo};
 
 use super::todos::today;
@@ -18,25 +18,6 @@ use crate::app::AppState;
 /// Agenda routes.
 pub(super) fn routes() -> Router<AppState> {
     Router::new().route("/api/agenda", get(agenda))
-}
-
-/// Query of `GET /api/agenda`.
-#[derive(Debug, Default, Deserialize)]
-struct AgendaQuery {
-    /// `json` (default) or `text`.
-    #[serde(default)]
-    format: Format,
-}
-
-/// How the agenda is answered.
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Format {
-    /// [`Agenda`] as JSON.
-    #[default]
-    Json,
-    /// [`Agenda::text`] alone, as plain text.
-    Text,
 }
 
 /// Open todos due today or before.
@@ -71,14 +52,10 @@ struct AgendaTodo {
     priority: Priority,
 }
 
-/// `GET /api/agenda`: open todos due today or overdue. `?format=text` for
-/// plain lines.
-async fn agenda(State(state): State<AppState>, Query(query): Query<AgendaQuery>) -> Response {
+/// `GET /api/agenda`: open todos due today or overdue.
+async fn agenda(State(state): State<AppState>) -> Response {
     let agenda = Agenda::build(state.list_todos(None), today());
-    match query.format {
-        Format::Json => Json(agenda).into_response(),
-        Format::Text => agenda.text.into_response(),
-    }
+    Json(agenda).into_response()
 }
 
 impl Agenda {
@@ -204,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn text_format_is_the_lines_alone() {
         let (_dir, app) = test_app(&note());
-        let (status, body) = get(&app, "/api/agenda?format=text").await;
+        let (status, body) = get(&app, "/api/agenda").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "⚠ late (3d late)\n• today high\n• today low");
 
