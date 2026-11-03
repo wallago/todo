@@ -19,6 +19,8 @@ use super::{
 mod about;
 /// The `y/n` popup before a delete.
 mod confirm;
+/// The dashboard page.
+mod dashboard;
 /// The add and edit form.
 mod form;
 /// The manager page.
@@ -63,13 +65,17 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
     let focused = state.focus == Focus::Page;
     let loading = state.is_loading(state.page).then(|| spinner(state.tick));
     // The manager keeps its todos on screen while they reload.
-    let blank = state.page == Page::Stats || state.manager.todos.is_empty();
+    let blank = state.page != Page::Manager || state.manager.todos.is_empty();
     if let Some(spinner) = loading.filter(|_| blank) {
         render_loading(state.page.name(), spinner, focused, frame, page);
     } else if let Some(error) = &state.error {
         render_error(error, frame, page);
     } else {
         match state.page {
+            Page::Dashboard => {
+                let today = chrono::Local::now().date_naive();
+                dashboard::render(&mut state.dashboard, today, focused, frame, page);
+            }
             Page::Manager => manager::render(&mut state.manager, loading, focused, frame, page),
             Page::Stats => stats::render(&state.stats, focused, frame, page),
             Page::About => about::render(focused, frame, page),
@@ -242,7 +248,10 @@ mod tests {
 
     /// A state with two notes, the first open with two todos.
     fn with_todos() -> State {
-        let mut state = State::default();
+        let mut state = State {
+            page: Page::Manager,
+            ..State::default()
+        };
         state.set_notes(vec!["projects/todo.md".into(), "travel.md".into()]);
         state.manager.set_todos(vec![
             todo("a", "write the tui", Status::Todo),
@@ -365,6 +374,23 @@ mod tests {
         let loaded = screen(&mut state);
         assert!(!loaded.contains("loading…"));
         assert!(loaded.contains("1/4"));
+    }
+
+    #[test]
+    fn dashboard_shows_totals_and_due_todos() {
+        let mut late = todo("a", "renew visa", Status::Todo);
+        late.due = chrono::NaiveDate::from_ymd_opt(2026, 11, 1);
+        let mut state = State::default();
+        state.dashboard.set(vec![(
+            "travel/japan.md".into(),
+            vec![late, todo("b", "book flight", Status::Done)],
+        )]);
+        let screen = screen(&mut state);
+        assert!(screen.contains("dashboard"));
+        assert!(screen.contains("✓ 1 done"));
+        assert!(screen.contains("1 to do"));
+        assert!(screen.contains("due (1)"));
+        assert!(screen.contains("2026-11-01  renew visa  travel/japan"));
     }
 
     #[test]
