@@ -1,7 +1,7 @@
 //! The manager page: one note's todos.
 
 use ratatui::widgets::ListState;
-use todo_client::{Id, Status, Todo};
+use todo_client::{Id, Priority, Status, Todo};
 
 /// The note open on the manager page, and its todos.
 #[derive(Debug, Default)]
@@ -83,7 +83,15 @@ fn sort(todos: &mut [Todo]) {
             Status::Cancelled => 2,
             Status::Done => 3,
         };
-        (rank, todo.due.is_none(), todo.due)
+        let priority = match todo.priority {
+            Priority::Highest => 0,
+            Priority::High => 1,
+            Priority::Medium => 2,
+            Priority::Normal => 3,
+            Priority::Low => 4,
+            Priority::Lowest => 5,
+        };
+        (rank, todo.due.is_none(), todo.due, priority)
     });
 }
 
