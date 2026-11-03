@@ -74,7 +74,7 @@ impl Manager {
 }
 
 /// To do, in progress, cancelled, then done; soonest due first in each,
-/// undated last, file order otherwise.
+/// undated last, then highest priority, file order otherwise.
 fn sort(todos: &mut [Todo]) {
     todos.sort_by_key(|todo| {
         let rank = match todo.status {
@@ -148,6 +148,17 @@ mod tests {
             order(&manager),
             ["soon", "later", "undated", "doing", "cancelled", "done"]
         );
+    }
+
+    #[test]
+    fn same_due_date_puts_the_highest_priority_first() {
+        let mut low = todo("low", Status::Todo, Some(5));
+        low.priority = Priority::Low;
+        let mut high = todo("high", Status::Todo, Some(5));
+        high.priority = Priority::High;
+        let mut manager = Manager::default();
+        manager.set_todos(vec![low, todo("normal", Status::Todo, Some(5)), high]);
+        assert_eq!(order(&manager), ["high", "normal", "low"]);
     }
 
     #[test]
