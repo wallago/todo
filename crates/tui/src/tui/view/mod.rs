@@ -76,7 +76,7 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
         }
     }
     if let Some(picker) = &mut state.picker {
-        picker::render(picker, frame, page);
+        picker::render(picker, &state.stats, frame, page);
     }
     if let Some(form) = &state.form {
         form::render(form, frame, page);
@@ -321,6 +321,22 @@ mod tests {
     }
 
     #[test]
+    fn picker_shows_when_each_note_is_due() {
+        let mut state = with_todos();
+        state.stats = vec![NoteStats {
+            note: "travel.md".into(),
+            done: 0,
+            total: 1,
+            next_due: Some(chrono::Local::now().date_naive()),
+        }];
+        state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let shown = screen(&mut state);
+        // Against the popup's right border.
+        assert!(shown.contains("travel "));
+        assert!(shown.contains("today │"));
+    }
+
+    #[test]
     fn picker_offers_a_new_note_when_nothing_matches() {
         let mut state = with_todos();
         state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
@@ -338,6 +354,7 @@ mod tests {
                 note: "travel.md".into(),
                 done: 1,
                 total: 4,
+                next_due: None,
             }],
             ..State::default()
         };
@@ -360,6 +377,7 @@ mod tests {
             note: "travel.md".into(),
             done: 1,
             total: 4,
+            next_due: None,
         };
         state.finish(id, Ok(vec![Loaded::Stats(vec![row])]));
         let loaded = screen(&mut state);
