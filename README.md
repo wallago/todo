@@ -104,7 +104,7 @@ In Rust: `todo_client::Client::new(url).with_token(&token)`.
 ### Read-only token (phone widgets)
 
 `GET /api/agenda` lists open todos due today or overdue, overdue first.
-It answers JSON (`date`, `overdue`, `today`, `text`, `todos`), or with `?format=text` just the lines:
+It answers JSON: `date`, `overdue`, `today`, `todos`, and `text` with one line per todo:
 
 ```text
 ⚠ Pay rent (2d late)
