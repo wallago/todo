@@ -179,16 +179,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn text_format_is_the_lines_alone() {
-        let (_dir, app) = test_app(&note());
+    async fn nothing_due_says_so() {
+        let (_dir, app) = test_app("- [ ] no date ^aaaaaa\n");
         let (status, body) = get(&app, "/api/agenda").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, "⚠ late (3d late)\n• today high\n• today low");
-
-        let (_dir, app) = test_app("- [ ] no date ^aaaaaa\n");
-        let (_, body) = get(&app, "/api/agenda?format=text").await;
-        assert_eq!(body, "Nothing due");
-        let (status, _) = get(&app, "/api/agenda?format=xml").await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body: Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(body["text"], "Nothing due");
+        assert_eq!(body["todos"], json!([]));
+        assert_eq!(
+            (body["overdue"].clone(), body["today"].clone()),
+            (json!(0), json!(0))
+        );
     }
 }
