@@ -20,6 +20,16 @@ GET {{host}}/api/notes
 Authorization: Bearer {{token}}
 Accept: application/json
 
+### Open todos due today or overdue (widgets)
+# @name agenda
+GET {{host}}/api/agenda
+Authorization: Bearer {{token}}
+Accept: application/json
+
+### Same as plain lines, with the read-only token in the URL
+# @name agenda_text
+GET {{host}}/api/agenda?format=text&token={{read_token}}
+
 ### One todo by id (404 if unknown)
 # @name one
 GET {{host}}/api/todos/a1b2c3

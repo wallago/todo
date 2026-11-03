@@ -1,15 +1,17 @@
-//! Bearer token on `/api` and `/mcp`.
+//! Bearer token on `/api` and `/mcp`, read-only token on `/api/agenda`,
+//! and OAuth access tokens when OAuth is on.
 
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Request, State},
+    extract::{Query, Request, State},
     http::header,
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
 use super::api_error::ApiError;
@@ -56,38 +58,59 @@ impl fmt::Debug for Token {
     }
 }
 
-/// What protected routes accept: the static token, and OAuth access tokens
-/// when OAuth is on.
+/// The main token, the optional read-only one, and OAuth if it is on.
 #[derive(Clone)]
-pub(super) struct Guard {
-    /// The static token.
-    pub(super) token: Token,
-    /// Issues and checks OAuth access tokens.
+pub(super) struct Tokens {
+    /// Everything, sent as a header only.
+    pub(super) main: Token,
+    /// `GET /api/agenda` only, as a header or `?token=`, for widgets that
+    /// can't set headers (KWGT). A leak can't change anything.
+    pub(super) read: Option<Token>,
+    /// Issues and checks OAuth access tokens, which open what the main token
+    /// opens. `None`: OAuth off.
     pub(super) oauth: Option<Issuer>,
 }
 
-/// Middleware: 401 unless the request sends `Authorization: Bearer <token>`,
-/// with the static token or an OAuth access token.
-pub(super) async fn require(State(guard): State<Guard>, request: Request, next: Next) -> Response {
-    let sent = request
+impl Tokens {
+    /// `true` if `sent` is the main token or a live OAuth access token.
+    fn full(&self, sent: &str) -> bool {
+        self.main.matches(sent) || self.oauth.as_ref().is_some_and(|oauth| oauth.accepts(sent))
+    }
+}
+
+// By hand: the issuer holds the main token.
+impl fmt::Debug for Tokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tokens")
+            .field("main", &self.main)
+            .field("read", &self.read)
+            .field("oauth", &self.oauth.is_some())
+            .finish()
+    }
+}
+
+/// `?token=` on `/api/agenda`.
+#[derive(Deserialize)]
+struct TokenQuery {
+    /// The read-only token.
+    token: Option<String>,
+}
+
+/// The token in `Authorization: Bearer <token>`, if any.
+fn bearer(request: &Request) -> Option<&str> {
+    request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, sent)| sent.trim());
-    let accepted = sent.is_some_and(|sent| {
-        guard.token.matches(sent)
-            || guard
-                .oauth
-                .as_ref()
-                .is_some_and(|oauth| oauth.accepts(sent))
-    });
-    if accepted {
-        return next.run(request).await;
-    }
-    // With OAuth on, point clients such as claude.ai to the login (RFC 9728).
-    let challenge = match &guard.oauth {
+        .map(|(_, sent)| sent.trim())
+}
+
+/// The 401 answer. With OAuth on, it points clients such as claude.ai to the
+/// login (RFC 9728).
+fn unauthorized(tokens: &Tokens) -> Response {
+    let challenge = match &tokens.oauth {
         Some(oauth) => format!(
             "Bearer resource_metadata=\"{}\"",
             oauth.resource_metadata_url()
@@ -101,6 +124,46 @@ pub(super) async fn require(State(guard): State<Guard>, request: Request, next: 
         .into_response()
 }
 
+/// Middleware: 401 unless the request sends `Authorization: Bearer <token>`,
+/// with the main token or an OAuth access token.
+pub(super) async fn require(
+    State(tokens): State<Tokens>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if bearer(&request).is_some_and(|sent| tokens.full(sent)) {
+        return next.run(request).await;
+    }
+    unauthorized(&tokens)
+}
+
+/// `true` if `request` sends the main, read-only or an OAuth access token as a
+/// header, or the
+/// read-only one as `?token=`.
+fn allows_read(tokens: &Tokens, request: &Request) -> bool {
+    let read = tokens.read.as_ref();
+    let header_ok = bearer(request)
+        .is_some_and(|sent| tokens.full(sent) || read.is_some_and(|read| read.matches(sent)));
+    header_ok
+        || Query::<TokenQuery>::try_from_uri(request.uri())
+            .ok()
+            .and_then(|Query(query)| query.token)
+            .is_some_and(|sent| read.is_some_and(|read| read.matches(&sent)))
+}
+
+/// Middleware: like [`require`], but also takes the read-only token, as a
+/// header or `?token=`. The main token stays header-only, out of URLs and logs.
+pub(super) async fn require_read(
+    State(tokens): State<Tokens>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if allows_read(&tokens, &request) {
+        return next.run(request).await;
+    }
+    unauthorized(&tokens)
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::{Body, to_bytes};
@@ -111,9 +174,14 @@ mod tests {
     use super::*;
     use crate::server::test_router;
 
-    /// A router whose token is `secret`.
+    /// A router whose token is `secret` and read-only token `peek`.
     fn app() -> (tempfile::TempDir, axum::Router) {
-        test_router("- [ ] a ^aaaaaa\n", Some(Token::from_static("secret")))
+        let tokens = Tokens {
+            main: Token("secret".into()),
+            read: Some(Token("peek".into())),
+            oauth: None,
+        };
+        test_router("- [ ] a ^aaaaaa\n", Some(tokens))
     }
 
     /// GETs `uri` with this `Authorization` header, if any.
@@ -157,6 +225,36 @@ mod tests {
         for auth in ["Bearer secret", "bearer secret"] {
             let response = get(&app, "/api/todos", Some(auth)).await;
             assert_eq!(response.status(), StatusCode::OK, "{auth}");
+        }
+    }
+
+    #[tokio::test]
+    async fn read_token_only_opens_the_agenda() {
+        let (_dir, app) = app();
+        for (uri, auth) in [
+            ("/api/agenda", Some("Bearer secret")),
+            ("/api/agenda", Some("Bearer peek")),
+            ("/api/agenda?token=peek", None),
+            ("/api/agenda?format=text&token=peek", None),
+        ] {
+            let response = get(&app, uri, auth).await;
+            assert_eq!(response.status(), StatusCode::OK, "{uri} {auth:?}");
+        }
+        for (uri, auth) in [
+            ("/api/agenda", None),
+            ("/api/agenda?token=wrong", None),
+            // The main token never goes in a URL.
+            ("/api/agenda?token=secret", None),
+            ("/api/todos?token=peek", None),
+            ("/api/todos", Some("Bearer peek")),
+            ("/mcp", Some("Bearer peek")),
+        ] {
+            let response = get(&app, uri, auth).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{uri} {auth:?}"
+            );
         }
     }
 

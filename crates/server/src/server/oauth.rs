@@ -487,17 +487,19 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::server::test_router_with;
+    use crate::server::{auth::Tokens, test_router};
 
     const BASE: &str = "https://todo.example.com";
     const CALLBACK: &str = "https://claude.ai/api/mcp/auth_callback";
 
     fn app() -> (tempfile::TempDir, Router) {
-        test_router_with(
-            "- [ ] a ^aaaaaa\n",
-            Some(Token::from_static("secret")),
-            Some(BASE),
-        )
+        let main = Token::from_static("secret");
+        let tokens = Tokens {
+            oauth: Some(Issuer::new(BASE, main.clone())),
+            main,
+            read: Some(Token::from_static("peek")),
+        };
+        test_router("- [ ] a ^aaaaaa\n", Some(tokens))
     }
 
     async fn send(app: &Router, request: Request<Body>) -> (StatusCode, Response) {
@@ -672,6 +674,13 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let (status, _) = send(&app, get("/mcp", Some(access))).await;
         assert_ne!(status, StatusCode::UNAUTHORIZED);
+        // The agenda takes it as a header, but never in the URL.
+        let (status, _) = send(&app, get("/api/agenda", Some(access))).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send(&app, get(&format!("/api/agenda?token={access}"), None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = send(&app, get("/api/agenda?token=peek", None)).await;
+        assert_eq!(status, StatusCode::OK);
         let (status, _) = send(&app, get("/api/todos", Some(refresh))).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         // A code is not an access token either.
