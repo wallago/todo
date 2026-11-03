@@ -96,7 +96,7 @@ pub(super) enum Action {
     Refresh,
     /// Reload the manager's note.
     LoadTodos,
-    /// Reload every note's counts.
+    /// Reload every note's counts and next due date.
     LoadStats,
     /// Reload the dashboard.
     LoadDashboard,
@@ -121,6 +121,8 @@ pub(super) struct NoteStats {
     pub(super) done: usize,
     /// Every todo.
     pub(super) total: usize,
+    /// Earliest due date of its open todos, shown in the note picker.
+    pub(super) next_due: Option<chrono::NaiveDate>,
 }
 
 /// What a finished server call brings back, applied by [`State::finish`].
@@ -364,6 +366,8 @@ impl State {
             (_, Page::Manager, KeyCode::Char('/')) => {
                 self.focus = Focus::Page;
                 self.picker = Some(Picker::new(self.notes.clone()));
+                // For each note's next due date.
+                return Some(Action::LoadStats);
             }
             (Focus::Sidebar, _, _) if up || down => return self.turn_page(down),
             (Focus::Sidebar, _, KeyCode::Tab | KeyCode::Enter) => self.focus = Focus::Page,
@@ -683,6 +687,7 @@ mod tests {
             note: "todo.md".into(),
             done: 1,
             total: 2,
+            next_due: None,
         };
         state.finish(id, Ok(vec![Loaded::Stats(vec![row.clone()])]));
         assert!(!state.is_busy());

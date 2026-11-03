@@ -100,7 +100,7 @@ fn spawn(
         note: state.manager.note.clone(),
         notes: state.notes.clone(),
         selected: state.manager.selected().cloned(),
-        stats: state.page == Page::Stats,
+        stats: state.page == Page::Stats || state.picker.is_some(),
         dashboard: state.page == Page::Dashboard,
     };
     let client = client.clone();
@@ -125,7 +125,7 @@ struct Job {
     notes: Vec<String>,
     /// The todo under the cursor.
     selected: Option<Todo>,
-    /// Whether the stats page is open.
+    /// Whether the stats page or the note picker is open.
     stats: bool,
     /// Whether the dashboard is open.
     dashboard: bool,
@@ -208,16 +208,22 @@ async fn load_todos(client: &Client, note: Option<String>) -> todo_client::Resul
     })
 }
 
-/// Reloads every note's counts.
+/// Reloads every note's counts and next due date.
 async fn load_stats(client: &Client, notes: &[String]) -> todo_client::Result<Loaded> {
     let mut rows = Vec::with_capacity(notes.len());
     for note in notes {
         let todos = client.list_note(note).await?;
         let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
+        let next_due = todos
+            .iter()
+            .filter(|todo| !todo.status.is_closed())
+            .filter_map(|todo| todo.due)
+            .min();
         rows.push(NoteStats {
             note: note.clone(),
             done,
             total: todos.len(),
+            next_due,
         });
     }
     Ok(Loaded::Stats(rows))
