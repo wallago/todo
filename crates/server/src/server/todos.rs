@@ -129,7 +129,7 @@ impl AppState {
 }
 
 /// Today, in the server's time zone.
-fn today() -> NaiveDate {
+pub(super) fn today() -> NaiveDate {
     chrono::Local::now().date_naive()
 }
 
