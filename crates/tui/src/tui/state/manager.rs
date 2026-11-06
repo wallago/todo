@@ -1,7 +1,7 @@
 //! The manager page: one note's todos.
 
 use ratatui::widgets::ListState;
-use todo_client::{Id, Todo};
+use todo_client::{Id, Priority, Status, Todo};
 
 /// The note open on the manager page, and its todos.
 #[derive(Debug, Default)]
@@ -24,8 +24,9 @@ impl Manager {
         }
     }
 
-    /// Replaces the todos, keeping the cursor row in range.
-    pub(in crate::tui) fn set_todos(&mut self, todos: Vec<Todo>) {
+    /// Replaces the todos, sorted, keeping the cursor row in range.
+    pub(in crate::tui) fn set_todos(&mut self, mut todos: Vec<Todo>) {
+        sort(&mut todos);
         let at = self.list.selected().unwrap_or(0);
         self.list.select(if todos.is_empty() {
             None
@@ -44,6 +45,8 @@ impl Manager {
     pub(in crate::tui) fn replace(&mut self, todo: Todo) {
         if let Some(old) = self.todos.iter_mut().find(|old| old.id == todo.id) {
             *old = todo;
+            // The cursor stays on its row, so ticking moves on to the next.
+            sort(&mut self.todos);
         }
     }
 
@@ -70,6 +73,28 @@ impl Manager {
     }
 }
 
+/// To do, in progress, cancelled, then done; soonest due first in each,
+/// undated last, then highest priority, file order otherwise.
+fn sort(todos: &mut [Todo]) {
+    todos.sort_by_key(|todo| {
+        let rank = match todo.status {
+            Status::Todo => 0,
+            Status::InProgress => 1,
+            Status::Cancelled => 2,
+            Status::Done => 3,
+        };
+        let priority = match todo.priority {
+            Priority::Highest => 0,
+            Priority::High => 1,
+            Priority::Medium => 2,
+            Priority::Normal => 3,
+            Priority::Low => 4,
+            Priority::Lowest => 5,
+        };
+        (rank, todo.due.is_none(), todo.due, priority)
+    });
+}
+
 /// Moves `list` one row, without wrapping, in a list of `len` rows.
 pub(super) fn step(list: &mut ListState, len: usize, down: bool) {
     if len == 0 {
@@ -82,4 +107,69 @@ pub(super) fn step(list: &mut ListState, len: usize, down: bool) {
         at.saturating_sub(1)
     };
     list.select(Some(to.min(len - 1)));
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    /// A todo with `status`, due `day` of November or never.
+    fn todo(id: &str, status: Status, day: Option<u32>) -> Todo {
+        let mut todo = Todo::new(Id(id.into()), id, NaiveDate::MIN);
+        todo.status = status;
+        todo.due = day.and_then(|day| NaiveDate::from_ymd_opt(2026, 11, day));
+        todo
+    }
+
+    /// The todos' texts, in order.
+    fn order(manager: &Manager) -> Vec<&str> {
+        manager
+            .todos
+            .iter()
+            .map(|todo| todo.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn sorts_by_status_then_due_date() {
+        let mut manager = Manager::default();
+        manager.set_todos(vec![
+            todo("done", Status::Done, Some(1)),
+            todo("undated", Status::Todo, None),
+            todo("later", Status::Todo, Some(6)),
+            todo("cancelled", Status::Cancelled, None),
+            todo("doing", Status::InProgress, Some(9)),
+            todo("soon", Status::Todo, Some(3)),
+        ]);
+        assert_eq!(
+            order(&manager),
+            ["soon", "later", "undated", "doing", "cancelled", "done"]
+        );
+    }
+
+    #[test]
+    fn same_due_date_puts_the_highest_priority_first() {
+        let mut low = todo("low", Status::Todo, Some(5));
+        low.priority = Priority::Low;
+        let mut high = todo("high", Status::Todo, Some(5));
+        high.priority = Priority::High;
+        let mut manager = Manager::default();
+        manager.set_todos(vec![low, todo("normal", Status::Todo, Some(5)), high]);
+        assert_eq!(order(&manager), ["high", "normal", "low"]);
+    }
+
+    #[test]
+    fn a_ticked_todo_moves_down_and_the_cursor_stays() {
+        let mut manager = Manager::default();
+        manager.set_todos(vec![
+            todo("a", Status::Todo, Some(1)),
+            todo("b", Status::Todo, Some(2)),
+        ]);
+        manager.replace(todo("a", Status::Done, Some(1)));
+        assert_eq!(order(&manager), ["b", "a"]);
+        assert_eq!(manager.selected().map(|todo| todo.text.as_str()), Some("b"));
+    }
 }

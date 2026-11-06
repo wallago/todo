@@ -8,6 +8,8 @@ use crate::config::Keys;
 
 /// The `y/n` popup before a delete.
 mod confirm;
+/// The dashboard page: totals and due todos.
+mod dashboard;
 /// The add and edit form.
 mod form;
 /// The manager page: one note's todos.
@@ -16,6 +18,7 @@ mod manager;
 mod picker;
 
 pub(super) use confirm::Confirm;
+pub(super) use dashboard::{Dashboard, DueTodo};
 pub(super) use form::{Field, Form, PRIORITIES, STATUSES};
 pub(super) use manager::Manager;
 pub(super) use picker::Picker;
@@ -44,8 +47,10 @@ pub(super) enum Focus {
 /// Page shown on the right, picked in the sidebar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Page {
-    /// One note's todos, the note picked with `/`.
+    /// Totals and every due todo, across notes.
     #[default]
+    Dashboard,
+    /// One note's todos, the note picked with `/`.
     Manager,
     /// How much of each note is done.
     Stats,
@@ -55,11 +60,12 @@ pub(super) enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub(super) const ALL: [Self; 3] = [Self::Manager, Self::Stats, Self::About];
+    pub(super) const ALL: [Self; 4] = [Self::Dashboard, Self::Manager, Self::Stats, Self::About];
 
     /// Label in the sidebar.
     pub(super) fn name(self) -> &'static str {
         match self {
+            Self::Dashboard => "dashboard",
             Self::Manager => "manager",
             Self::Stats => "stats",
             Self::About => "about",
@@ -90,8 +96,12 @@ pub(super) enum Action {
     Refresh,
     /// Reload the manager's note.
     LoadTodos,
-    /// Reload every note's counts.
+    /// Reload every note's counts and next due date.
     LoadStats,
+    /// Reload the dashboard.
+    LoadDashboard,
+    /// Reload the manager's note, then put the cursor on this todo.
+    Jump(Id),
     /// Tick the selected todo, or reopen it if it's closed.
     Toggle,
     /// Add this todo to the manager's note, then give it this status.
@@ -111,6 +121,8 @@ pub(super) struct NoteStats {
     pub(super) done: usize,
     /// Every todo.
     pub(super) total: usize,
+    /// Earliest due date of its open todos, shown in the note picker.
+    pub(super) next_due: Option<chrono::NaiveDate>,
 }
 
 /// What a finished server call brings back, applied by [`State::finish`].
@@ -122,6 +134,8 @@ pub(super) enum Loaded {
     Todos(String, Vec<Todo>),
     /// Every note's counts.
     Stats(Vec<NoteStats>),
+    /// Every note, with its todos, for the dashboard.
+    Dashboard(Vec<(String, Vec<Todo>)>),
     /// Every todo in the vault, for its tags.
     Tags(Vec<Todo>),
     /// This todo, as the server now has it.
@@ -141,6 +155,8 @@ pub(super) struct State {
     pub(super) page: Page,
     /// Note paths from the server, like `projects/todo.md`.
     pub(super) notes: Vec<String>,
+    /// The dashboard page.
+    pub(super) dashboard: Dashboard,
     /// The manager page.
     pub(super) manager: Manager,
     /// The note finder, while open.
@@ -173,6 +189,7 @@ impl Default for State {
             focus: Focus::default(),
             page: Page::default(),
             notes: Vec::new(),
+            dashboard: Dashboard::default(),
             manager: Manager::default(),
             picker: None,
             form: None,
@@ -219,6 +236,7 @@ impl State {
         let page = match action {
             _ if quiet => None,
             Action::LoadStats => Some(Page::Stats),
+            Action::LoadDashboard => Some(Page::Dashboard),
             Action::Refresh => Some(self.page),
             _ => Some(Page::Manager),
         };
@@ -254,6 +272,7 @@ impl State {
                 }
             }
             Loaded::Stats(stats) => self.stats = stats,
+            Loaded::Dashboard(notes) => self.dashboard.set(notes),
             Loaded::Tags(todos) => self.set_tags(&todos),
             Loaded::Changed(todo) => {
                 self.learn_tags(std::slice::from_ref(&todo));
@@ -347,18 +366,16 @@ impl State {
             (_, Page::Manager, KeyCode::Char('/')) => {
                 self.focus = Focus::Page;
                 self.picker = Some(Picker::new(self.notes.clone()));
+                // For each note's next due date.
+                return Some(Action::LoadStats);
             }
-            (Focus::Sidebar, _, _) if up || down => {
-                let before = self.page;
-                self.page = self.page.step(down);
-                if self.page == Page::Stats && before != Page::Stats {
-                    return Some(Action::LoadStats);
-                }
-            }
+            (Focus::Sidebar, _, _) if up || down => return self.turn_page(down),
             (Focus::Sidebar, _, KeyCode::Tab | KeyCode::Enter) => self.focus = Focus::Page,
             (Focus::Sidebar, _, _) if right => self.focus = Focus::Page,
             (Focus::Page, _, KeyCode::Tab | KeyCode::Esc) => self.focus = Focus::Sidebar,
             (Focus::Page, _, _) if left => self.focus = Focus::Sidebar,
+            (Focus::Page, Page::Dashboard, _) if up || down => self.dashboard.step(down),
+            (Focus::Page, Page::Dashboard, KeyCode::Enter) => return self.open_due(),
             (Focus::Page, Page::Manager, _) if up || down => self.manager.step(down),
             (Focus::Page, Page::Manager, KeyCode::Enter) if self.manager.selected().is_some() => {
                 return Some(Action::Toggle);
@@ -381,6 +398,26 @@ impl State {
             _ => {}
         }
         None
+    }
+
+    /// Moves to the next (or previous) page, loading what it shows.
+    fn turn_page(&mut self, down: bool) -> Option<Action> {
+        let before = self.page;
+        self.page = self.page.step(down);
+        match self.page {
+            _ if self.page == before => None,
+            Page::Dashboard => Some(Action::LoadDashboard),
+            Page::Stats => Some(Action::LoadStats),
+            _ => None,
+        }
+    }
+
+    /// Opens the selected due todo's note in the manager, cursor on it.
+    fn open_due(&mut self) -> Option<Action> {
+        let due = self.dashboard.selected()?.clone();
+        self.page = Page::Manager;
+        self.manager.open(Some(due.note));
+        Some(Action::Jump(due.todo.id))
     }
 
     /// Keys that do something right now, as `(keys, what they do)`.
@@ -443,6 +480,13 @@ impl State {
                 ("tab", "sidebar"),
                 ("q", "quit"),
             ],
+            (Focus::Page, Page::Dashboard) => &[
+                ("↑↓", "move"),
+                ("enter", "open in manager"),
+                ("tab", "sidebar"),
+                ("r", "refresh"),
+                ("q", "quit"),
+            ],
             (Focus::Page, _) => &[("tab", "sidebar"), ("r", "refresh"), ("q", "quit")],
         }
     }
@@ -475,7 +519,10 @@ mod tests {
 
     /// A state with three notes, the first open.
     fn with_notes() -> State {
-        let mut state = State::default();
+        let mut state = State {
+            page: Page::Manager,
+            ..State::default()
+        };
         state.set_notes(vec![
             "projects/todo/main.md".into(),
             "travel/japan.md".into(),
@@ -584,13 +631,49 @@ mod tests {
 
     #[test]
     fn sidebar_walks_the_pages_and_loads_stats() {
-        let mut state = State::default();
+        let mut state = State {
+            page: Page::Manager,
+            ..State::default()
+        };
         assert_eq!(state.on_key(press(KeyCode::Down)), Some(Action::LoadStats));
         assert_eq!(state.page, Page::Stats);
         assert_eq!(state.on_key(press(KeyCode::Down)), None);
         assert_eq!(state.page, Page::About);
         state.on_key(press(KeyCode::Down));
         assert_eq!(state.page, Page::About);
+        for _ in 0..2 {
+            state.on_key(press(KeyCode::Up));
+        }
+        assert_eq!(
+            state.on_key(press(KeyCode::Up)),
+            Some(Action::LoadDashboard)
+        );
+        assert_eq!(state.page, Page::Dashboard);
+    }
+
+    #[test]
+    fn enter_on_a_due_todo_opens_it_in_the_manager() {
+        let mut state = with_notes();
+        state.page = Page::Dashboard;
+        state.focus = Focus::Page;
+        let mut todo = Todo::new(Id("t1".into()), "visa", chrono::NaiveDate::MIN);
+        todo.due = Some(chrono::NaiveDate::MIN);
+        state
+            .dashboard
+            .set(vec![("travel/japan.md".into(), vec![todo])]);
+        assert_eq!(
+            state.on_key(press(KeyCode::Enter)),
+            Some(Action::Jump(Id("t1".into())))
+        );
+        assert_eq!(state.page, Page::Manager);
+        assert_eq!(state.manager.note.as_deref(), Some("travel/japan.md"));
+        // The todos come, then the cursor lands on it.
+        let id = state.start(&Action::Jump(Id("t1".into())), false);
+        let other = Todo::new(Id("t0".into()), "flight", chrono::NaiveDate::MIN);
+        let todo = Todo::new(Id("t1".into()), "visa", chrono::NaiveDate::MIN);
+        let todos = Loaded::Todos("travel/japan.md".into(), vec![other, todo]);
+        state.finish(id, Ok(vec![todos, Loaded::Select(Id("t1".into()))]));
+        assert_eq!(state.manager.list.selected(), Some(1));
     }
 
     #[test]
@@ -604,6 +687,7 @@ mod tests {
             note: "todo.md".into(),
             done: 1,
             total: 2,
+            next_due: None,
         };
         state.finish(id, Ok(vec![Loaded::Stats(vec![row.clone()])]));
         assert!(!state.is_busy());

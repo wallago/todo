@@ -235,7 +235,6 @@ mod tests {
             ("/api/agenda", Some("Bearer secret")),
             ("/api/agenda", Some("Bearer peek")),
             ("/api/agenda?token=peek", None),
-            ("/api/agenda?format=text&token=peek", None),
         ] {
             let response = get(&app, uri, auth).await;
             assert_eq!(response.status(), StatusCode::OK, "{uri} {auth:?}");

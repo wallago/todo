@@ -100,7 +100,8 @@ fn spawn(
         note: state.manager.note.clone(),
         notes: state.notes.clone(),
         selected: state.manager.selected().cloned(),
-        stats: state.page == Page::Stats,
+        stats: state.page == Page::Stats || state.picker.is_some(),
+        dashboard: state.page == Page::Dashboard,
     };
     let client = client.clone();
     let done = done.clone();
@@ -124,8 +125,10 @@ struct Job {
     notes: Vec<String>,
     /// The todo under the cursor.
     selected: Option<Todo>,
-    /// Whether the stats page is open.
+    /// Whether the stats page or the note picker is open.
     stats: bool,
+    /// Whether the dashboard is open.
+    dashboard: bool,
 }
 
 /// The server calls behind [`spawn`].
@@ -139,12 +142,20 @@ async fn load(client: &Client, job: Job, action: Action) -> todo_client::Result<
             if job.stats {
                 loaded.push(load_stats(client, &notes).await?);
             }
+            if job.dashboard {
+                loaded.push(load_dashboard(client, &notes).await?);
+            }
             loaded.push(Loaded::Notes(notes));
             loaded.push(Loaded::Tags(client.list().await?));
             loaded.extend(load_todos(client, note).await?);
         }
         Action::LoadTodos => loaded.extend(load_todos(client, job.note).await?),
         Action::LoadStats => loaded.push(load_stats(client, &job.notes).await?),
+        Action::LoadDashboard => loaded.push(load_dashboard(client, &job.notes).await?),
+        Action::Jump(id) => {
+            loaded.extend(load_todos(client, job.note).await?);
+            loaded.push(Loaded::Select(id));
+        }
         Action::Toggle => {
             if let Some(todo) = job.selected {
                 let toggled = if todo.status.is_closed() {
@@ -197,19 +208,34 @@ async fn load_todos(client: &Client, note: Option<String>) -> todo_client::Resul
     })
 }
 
-/// Reloads every note's counts.
+/// Reloads every note's counts and next due date.
 async fn load_stats(client: &Client, notes: &[String]) -> todo_client::Result<Loaded> {
     let mut rows = Vec::with_capacity(notes.len());
     for note in notes {
         let todos = client.list_note(note).await?;
         let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
+        let next_due = todos
+            .iter()
+            .filter(|todo| !todo.status.is_closed())
+            .filter_map(|todo| todo.due)
+            .min();
         rows.push(NoteStats {
             note: note.clone(),
             done,
             total: todos.len(),
+            next_due,
         });
     }
     Ok(Loaded::Stats(rows))
+}
+
+/// Reloads every note's todos, for the dashboard.
+async fn load_dashboard(client: &Client, notes: &[String]) -> todo_client::Result<Loaded> {
+    let mut all = Vec::with_capacity(notes.len());
+    for note in notes {
+        all.push((note.clone(), client.list_note(note).await?));
+    }
+    Ok(Loaded::Dashboard(all))
 }
 
 /// `error: cause: cause...`, since reqwest hides the useful part in the sources.

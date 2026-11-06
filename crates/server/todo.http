@@ -26,9 +26,9 @@ GET {{host}}/api/agenda
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Same as plain lines, with the read-only token in the URL
-# @name agenda_text
-GET {{host}}/api/agenda?format=text&token={{read_token}}
+### Same, with the read-only token in the URL
+# @name agenda_read_token
+GET {{host}}/api/agenda?token={{read_token}}
 
 ### One todo by id (404 if unknown)
 # @name one
