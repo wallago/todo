@@ -16,6 +16,8 @@ mod api_error;
 mod auth;
 /// `/mcp`.
 mod mcp;
+/// OAuth login for claude.ai connectors.
+mod oauth;
 /// `/api/todos`.
 mod todos;
 
@@ -25,12 +27,17 @@ async fn health() -> StatusCode {
 }
 
 /// Global server routes. With `tokens`, `/api` and `/mcp` need the main
-/// token; `/api/agenda` also takes the read-only one.
+/// token (or an OAuth access token); `/api/agenda` also takes the read-only one.
+/// With OAuth on, its login routes are served too.
 fn routes(state: AppState, mcp_config: &McpConfig, tokens: Option<auth::Tokens>) -> Router {
     let protected = Router::new()
         .merge(todos::routes())
         .nest_service("/mcp", mcp::service(state.clone(), mcp_config));
     let readable = agenda::routes();
+    let mut router = Router::new().route("/health", get(health));
+    if let Some(issuer) = tokens.as_ref().and_then(|tokens| tokens.oauth.clone()) {
+        router = router.merge(oauth::routes(issuer));
+    }
     let (protected, readable) = match tokens {
         Some(tokens) => (
             protected.layer(middleware::from_fn_with_state(
@@ -41,11 +48,7 @@ fn routes(state: AppState, mcp_config: &McpConfig, tokens: Option<auth::Tokens>)
         ),
         None => (protected, readable),
     };
-    Router::new()
-        .route("/health", get(health))
-        .merge(protected)
-        .merge(readable)
-        .with_state(state)
+    router.merge(protected).merge(readable).with_state(state)
 }
 
 /// Start web services. Returns on Ctrl-C or SIGTERM (systemd stop).
@@ -60,13 +63,22 @@ pub(super) async fn start(
         .map(auth::Token::read)
         .transpose()?;
     let tokens = match (config.token_file.as_deref(), read) {
-        (Some(main), read) => Some(auth::Tokens {
-            main: auth::Token::read(main)?,
-            read,
-        }),
+        (Some(main), read) => {
+            let main = auth::Token::read(main)?;
+            let oauth = config
+                .public_url
+                .as_deref()
+                .map(|url| oauth::Issuer::new(url, main.clone()));
+            Some(auth::Tokens { main, read, oauth })
+        }
         (None, Some(_)) => {
             return Err(Error::Config(
                 "`read_token_file` needs a `token_file` too".to_owned(),
+            ));
+        }
+        (None, None) if config.public_url.is_some() => {
+            return Err(Error::Config(
+                "`public_url` turns on OAuth, which needs a `token_file`".to_owned(),
             ));
         }
         (None, None) => {

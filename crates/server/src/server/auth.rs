@@ -1,4 +1,5 @@
-//! Bearer token on `/api` and `/mcp`, read-only token on `/api/agenda`.
+//! Bearer token on `/api` and `/mcp`, read-only token on `/api/agenda`,
+//! and OAuth access tokens when OAuth is on.
 
 use std::fmt;
 use std::path::Path;
@@ -14,6 +15,7 @@ use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
 use super::api_error::ApiError;
+use super::oauth::Issuer;
 use crate::prelude::*;
 
 /// The token every protected request must send.
@@ -32,8 +34,19 @@ impl Token {
         Ok(Self(token.into()))
     }
 
+    /// A token from a string, for tests.
+    #[cfg(test)]
+    pub(super) fn from_static(token: &str) -> Self {
+        Self(token.into())
+    }
+
+    /// The raw token bytes, to derive keys from.
+    pub(super) fn secret(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
     /// `true` if `sent` is the token. Takes the same time wherever they differ.
-    fn matches(&self, sent: &str) -> bool {
+    pub(super) fn matches(&self, sent: &str) -> bool {
         self.0.as_bytes().ct_eq(sent.as_bytes()).into()
     }
 }
@@ -45,14 +58,35 @@ impl fmt::Debug for Token {
     }
 }
 
-/// The main token, and the optional read-only one.
-#[derive(Clone, Debug)]
+/// The main token, the optional read-only one, and OAuth if it is on.
+#[derive(Clone)]
 pub(super) struct Tokens {
     /// Everything, sent as a header only.
     pub(super) main: Token,
     /// `GET /api/agenda` only, as a header or `?token=`, for widgets that
     /// can't set headers (KWGT). A leak can't change anything.
     pub(super) read: Option<Token>,
+    /// Issues and checks OAuth access tokens, which open what the main token
+    /// opens. `None`: OAuth off.
+    pub(super) oauth: Option<Issuer>,
+}
+
+impl Tokens {
+    /// `true` if `sent` is the main token or a live OAuth access token.
+    fn full(&self, sent: &str) -> bool {
+        self.main.matches(sent) || self.oauth.as_ref().is_some_and(|oauth| oauth.accepts(sent))
+    }
+}
+
+// By hand: the issuer holds the main token.
+impl fmt::Debug for Tokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tokens")
+            .field("main", &self.main)
+            .field("read", &self.read)
+            .field("oauth", &self.oauth.is_some())
+            .finish()
+    }
 }
 
 /// `?token=` on `/api/agenda`.
@@ -73,34 +107,43 @@ fn bearer(request: &Request) -> Option<&str> {
         .map(|(_, sent)| sent.trim())
 }
 
-/// The 401 answer.
-fn unauthorized() -> Response {
+/// The 401 answer. With OAuth on, it points clients such as claude.ai to the
+/// login (RFC 9728).
+fn unauthorized(tokens: &Tokens) -> Response {
+    let challenge = match &tokens.oauth {
+        Some(oauth) => format!(
+            "Bearer resource_metadata=\"{}\"",
+            oauth.resource_metadata_url()
+        ),
+        None => "Bearer".to_owned(),
+    };
     (
-        [(header::WWW_AUTHENTICATE, "Bearer")],
+        [(header::WWW_AUTHENTICATE, challenge)],
         ApiError::unauthorized(),
     )
         .into_response()
 }
 
-/// Middleware: 401 unless the request sends `Authorization: Bearer <main token>`.
+/// Middleware: 401 unless the request sends `Authorization: Bearer <token>`,
+/// with the main token or an OAuth access token.
 pub(super) async fn require(
     State(tokens): State<Tokens>,
     request: Request,
     next: Next,
 ) -> Response {
-    if bearer(&request).is_some_and(|sent| tokens.main.matches(sent)) {
+    if bearer(&request).is_some_and(|sent| tokens.full(sent)) {
         return next.run(request).await;
     }
-    unauthorized()
+    unauthorized(&tokens)
 }
 
-/// `true` if `request` sends the main or read-only token as a header, or the
+/// `true` if `request` sends the main, read-only or an OAuth access token as a
+/// header, or the
 /// read-only one as `?token=`.
 fn allows_read(tokens: &Tokens, request: &Request) -> bool {
     let read = tokens.read.as_ref();
-    let header_ok = bearer(request).is_some_and(|sent| {
-        tokens.main.matches(sent) || read.is_some_and(|read| read.matches(sent))
-    });
+    let header_ok = bearer(request)
+        .is_some_and(|sent| tokens.full(sent) || read.is_some_and(|read| read.matches(sent)));
     header_ok
         || Query::<TokenQuery>::try_from_uri(request.uri())
             .ok()
@@ -118,7 +161,7 @@ pub(super) async fn require_read(
     if allows_read(&tokens, &request) {
         return next.run(request).await;
     }
-    unauthorized()
+    unauthorized(&tokens)
 }
 
 #[cfg(test)]
@@ -136,6 +179,7 @@ mod tests {
         let tokens = Tokens {
             main: Token("secret".into()),
             read: Some(Token("peek".into())),
+            oauth: None,
         };
         test_router("- [ ] a ^aaaaaa\n", Some(tokens))
     }
