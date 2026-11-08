@@ -71,12 +71,12 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
     } else if let Some(error) = &state.error {
         render_error(error, frame, page);
     } else {
+        let today = chrono::Local::now().date_naive();
         match state.page {
-            Page::Dashboard => {
-                let today = chrono::Local::now().date_naive();
-                dashboard::render(&mut state.dashboard, today, focused, frame, page);
+            Page::Dashboard => dashboard::render(&mut state.dashboard, today, focused, frame, page),
+            Page::Manager => {
+                manager::render(&mut state.manager, today, loading, focused, frame, page);
             }
-            Page::Manager => manager::render(&mut state.manager, loading, focused, frame, page),
             Page::Stats => stats::render(&state.stats, focused, frame, page),
             Page::About => about::render(focused, frame, page),
         }
@@ -91,6 +91,17 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
         confirm::render(confirm, frame, page);
     }
     render_key_bindings(state, frame, frame.area());
+}
+
+/// Colour of `todo`'s due date: red once late, accent today, plain text
+/// later, muted once closed.
+fn due_color(todo: &todo_client::Todo, today: chrono::NaiveDate) -> ratatui::style::Color {
+    match todo.due {
+        _ if todo.status.is_closed() => SECONDARY,
+        Some(due) if due < today => ERROR,
+        Some(due) if due == today => ACCENT,
+        _ => PRIMARY,
+    }
 }
 
 /// A rounded pane titled `title`, lit up while `focused`.
@@ -409,6 +420,22 @@ mod tests {
         assert!(screen.contains("1 to do"));
         assert!(screen.contains("due (1)"));
         assert!(screen.contains("2026-11-01  renew visa  travel/japan"));
+    }
+
+    #[rstest::rstest]
+    #[case::late(-1, Status::Todo, ERROR)]
+    #[case::today(0, Status::Todo, ACCENT)]
+    #[case::later(3, Status::InProgress, PRIMARY)]
+    #[case::closed(-1, Status::Done, SECONDARY)]
+    fn colours_the_due_date(
+        #[case] days: i64,
+        #[case] status: Status,
+        #[case] color: ratatui::style::Color,
+    ) {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        let mut due = todo("a", "renew visa", status);
+        due.due = Some(today + chrono::Duration::days(days));
+        assert_eq!(super::due_color(&due, today), color);
     }
 
     #[test]
