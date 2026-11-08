@@ -1,5 +1,6 @@
 //! The manager page: one note's todos.
 
+use chrono::NaiveDate;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -8,15 +9,16 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{list, note_name, pane};
+use super::{due_color, list, note_name, pane};
 use crate::tui::{
     state::Manager,
-    theme::{ACCENT, ACCENT_BIS, HIGHLIGHT, PRIMARY, SECONDARY},
+    theme::{ACCENT, ACCENT_BIS, PRIMARY, SECONDARY},
 };
 
 /// The open note's todos, with `spinner` after the title while they reload.
 pub(super) fn render(
     manager: &mut Manager,
+    today: NaiveDate,
     spinner: Option<&str>,
     focused: bool,
     frame: &mut Frame,
@@ -30,14 +32,17 @@ pub(super) fn render(
     if let Some(spinner) = spinner {
         title = format!("{title} {spinner}");
     }
-    let todos = list(manager.todos.iter().map(row), pane(&title, focused))
-        // Rows colour themselves; the selection only adds a background.
-        .highlight_style(Style::new().bg(ACCENT_BIS).bold());
+    let todos = list(
+        manager.todos.iter().map(|todo| row(todo, today)),
+        pane(&title, focused),
+    )
+    // Rows colour themselves; the selection only adds a background.
+    .highlight_style(Style::new().bg(ACCENT_BIS).bold());
     frame.render_stateful_widget(todos, rect, &mut manager.list);
 }
 
 /// `[ ] text ⏫ 2026-11-02`, dimmed once closed.
-fn row(todo: &Todo) -> Line<'_> {
+fn row(todo: &Todo, today: NaiveDate) -> Line<'_> {
     let text = if todo.status.is_closed() {
         SECONDARY
     } else {
@@ -51,7 +56,7 @@ fn row(todo: &Todo) -> Line<'_> {
         spans.push(Span::raw(format!(" {emoji}")));
     }
     if let Some(due) = todo.due {
-        spans.push(Span::styled(format!(" {due}"), HIGHLIGHT));
+        spans.push(Span::styled(format!(" {due}"), due_color(todo, today)));
     }
     for tag in &todo.tags {
         spans.push(Span::styled(format!(" #{tag}"), text));
