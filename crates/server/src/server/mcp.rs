@@ -29,6 +29,9 @@ pub(super) fn service(
     StreamableHttpService::new(move || Ok(Todos::new(state.clone())), Arc::default(), http)
 }
 
+/// Tag put on every todo added over MCP, so Claude's todos are easy to find.
+const CLAUDE_TAG: &str = "claude";
+
 /// What every tool returns: the todo(s) as JSON, or the error for the model.
 type Answer = Result<String, String>;
 
@@ -137,9 +140,12 @@ impl Todos {
 
     /// Adds a todo.
     #[tool(
-        description = "Add a todo to the inbox note, or to `note` (created if missing). Returns it with its new id."
+        description = "Add a todo to the inbox note, or to `note` (created if missing). It is always tagged `claude`. Returns it with its new id."
     )]
-    async fn add_todo(&self, Parameters(new): Parameters<NewTodo>) -> Answer {
+    async fn add_todo(&self, Parameters(mut new): Parameters<NewTodo>) -> Answer {
+        if !new.tags.iter().any(|tag| tag == CLAUDE_TAG) {
+            new.tags.push(CLAUDE_TAG.into());
+        }
         json(&self.state.add_todo(new).map_err(err)?)
     }
 
@@ -258,6 +264,26 @@ mod tests {
         assert!(listed.contains(r#""note": "travel.md""#), "{listed}");
         assert!(listed.contains(r#""id": "bbbbbb""#), "{listed}");
         assert!(!listed.contains("aaaaaa"), "{listed}");
+    }
+
+    #[tokio::test]
+    async fn add_tags_claude_once() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
+        let todos = Todos::new(AppState::new(store));
+        let add = |json: &str| serde_json::from_str::<NewTodo>(json).expect("json");
+
+        todos
+            .add_todo(Parameters(add(r#"{"text": "a", "tags": ["dev"]}"#)))
+            .await
+            .expect("added");
+        todos
+            .add_todo(Parameters(add(r#"{"text": "b", "tags": ["claude"]}"#)))
+            .await
+            .expect("added");
+        let note = std::fs::read_to_string(dir.path().join("todo.md")).expect("note");
+        assert!(note.contains("#dev #claude"), "{note}");
+        assert_eq!(note.matches("#claude").count(), 2, "{note}");
     }
 
     #[test]
