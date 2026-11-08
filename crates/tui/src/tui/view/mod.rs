@@ -435,7 +435,7 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
         let mut due = todo("a", "renew visa", status);
         due.due = Some(today + chrono::Duration::days(days));
-        assert_eq!(super::due_color(&due, today), color);
+        assert_eq!(due_color(&due, today), color);
     }
 
     #[test]
