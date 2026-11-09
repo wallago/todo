@@ -17,5 +17,7 @@ pub(super) const SECONDARY: Color = Color::Rgb(103, 128, 112);
 pub(super) const UNACCENT: Color = Color::Rgb(36, 53, 42);
 /// Warm highlight.
 pub(super) const HIGHLIGHT: Color = Color::Rgb(255, 190, 60);
+/// Cool highlight: due later this week.
+pub(super) const INFO: Color = Color::Rgb(90, 160, 255);
 /// Error.
 pub(super) const ERROR: Color = Color::Rgb(235, 87, 87);

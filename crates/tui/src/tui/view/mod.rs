@@ -12,7 +12,7 @@ use ratatui::{
 
 use super::{
     state::{Focus, Page, State},
-    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, HIGHLIGHT, PRIMARY, SECONDARY, UNACCENT},
+    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, HIGHLIGHT, INFO, PRIMARY, SECONDARY, UNACCENT},
 };
 
 /// The about page.
@@ -93,15 +93,18 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
     render_key_bindings(state, frame, frame.area());
 }
 
-/// Colour of `todo`'s due date: red once late, accent today, plain text
-/// later, muted once closed.
-fn due_color(todo: &todo_client::Todo, today: chrono::NaiveDate) -> ratatui::style::Color {
-    match todo.due {
+/// Bold due date: red once late, orange today, blue later this week
+/// (Monday to Sunday), muted after it or once closed.
+fn due_style(todo: &todo_client::Todo, today: chrono::NaiveDate) -> Style {
+    let sunday = today.week(chrono::Weekday::Mon).last_day();
+    let color = match todo.due {
         _ if todo.status.is_closed() => SECONDARY,
         Some(due) if due < today => ERROR,
-        Some(due) if due == today => ACCENT,
-        _ => PRIMARY,
-    }
+        Some(due) if due == today => HIGHLIGHT,
+        Some(due) if due <= sunday => INFO,
+        _ => SECONDARY,
+    };
+    Style::new().fg(color).bold()
 }
 
 /// A rounded pane titled `title`, lit up while `focused`.
@@ -424,18 +427,20 @@ mod tests {
 
     #[rstest::rstest]
     #[case::late(-1, Status::Todo, ERROR)]
-    #[case::today(0, Status::Todo, ACCENT)]
-    #[case::later(3, Status::InProgress, PRIMARY)]
+    #[case::today(0, Status::Todo, HIGHLIGHT)]
+    #[case::this_sunday(6, Status::InProgress, INFO)]
+    #[case::next_monday(7, Status::Todo, SECONDARY)]
     #[case::closed(-1, Status::Done, SECONDARY)]
-    fn colours_the_due_date(
+    fn styles_the_due_date(
         #[case] days: i64,
         #[case] status: Status,
         #[case] color: ratatui::style::Color,
     ) {
-        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        // A Monday, so its week ends 6 days later.
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
         let mut due = todo("a", "renew visa", status);
         due.due = Some(today + chrono::Duration::days(days));
-        assert_eq!(due_color(&due, today), color);
+        assert_eq!(due_style(&due, today), Style::new().fg(color).bold());
     }
 
     #[test]

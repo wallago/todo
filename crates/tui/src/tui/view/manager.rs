@@ -9,7 +9,7 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{due_color, list, note_name, pane};
+use super::{due_style, list, note_name, pane};
 use crate::tui::{
     state::Manager,
     theme::{ACCENT, ACCENT_BIS, PRIMARY, SECONDARY},
@@ -56,7 +56,7 @@ fn row(todo: &Todo, today: NaiveDate) -> Line<'_> {
         spans.push(Span::raw(format!(" {emoji}")));
     }
     if let Some(due) = todo.due {
-        spans.push(Span::styled(format!(" {due}"), due_color(todo, today)));
+        spans.push(Span::styled(format!(" {due}"), due_style(todo, today)));
     }
     for tag in &todo.tags {
         spans.push(Span::styled(format!(" #{tag}"), text));
