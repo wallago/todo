@@ -10,7 +10,7 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{due_color, list, note_name, pane};
+use super::{due_style, list, note_name, pane};
 use crate::tui::{
     state::{Dashboard, DueTodo},
     theme::{ACCENT, ACCENT_BIS, HIGHLIGHT, PRIMARY, SECONDARY},
@@ -78,10 +78,10 @@ fn tile(label: &str, value: Span<'_>, frame: &mut Frame, rect: Rect) {
     frame.render_widget(text, rect);
 }
 
-/// `2026-11-11  text ⏫   note`, the date coloured by [`due_color`].
+/// `2026-11-11  text ⏫   note`, the date coloured by [`due_style`].
 fn row(due: &DueTodo, today: NaiveDate, width: usize) -> Line<'_> {
     let todo = &due.todo;
-    let date = due_color(todo, today);
+    let date = due_style(todo, today);
     let mut spans = vec![
         Span::styled(
             todo.due.map(|day| day.to_string()).unwrap_or_default(),
