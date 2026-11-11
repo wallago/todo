@@ -19,6 +19,7 @@ naersk'.buildPackage {
   mainProgram = crate;
   meta = {
     description = "Just a personal Todo app.";
+    mainProgram = crate;
     license = with lib.licenses; [
       asl20
       mit
