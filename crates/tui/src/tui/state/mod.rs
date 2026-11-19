@@ -142,6 +142,21 @@ pub(super) enum Loaded {
     Changed(Todo),
     /// Put the cursor on this todo.
     Select(Id),
+    /// How the last sync went.
+    Sync(SyncStatus),
+    /// How many changes wait to be sent.
+    Pending(usize),
+}
+
+/// How the link to the server is doing, shown in the title bar.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct SyncStatus {
+    /// Why the last sync stopped early: `offline`, or the server's answer.
+    pub(super) problem: Option<String>,
+    /// Changes made here, not sent yet.
+    pub(super) pending: usize,
+    /// The last change the server refused, undone here.
+    pub(super) refused: Option<String>,
 }
 
 /// Application state.
@@ -167,8 +182,10 @@ pub(super) struct State {
     pub(super) confirm: Option<Confirm>,
     /// The stats page, one row per note.
     pub(super) stats: Vec<NoteStats>,
-    /// Last server error, shown until the next successful call.
-    pub(super) error: Option<String>,
+    /// How the link to the server is doing.
+    pub(super) sync: SyncStatus,
+    /// Whether a sync asked for with `r` (or at start) still runs.
+    pub(super) syncing: bool,
     /// Movement keys from the config.
     pub(super) keys: Keys,
     /// Every tag in the vault, sorted, offered in the form.
@@ -195,7 +212,8 @@ impl Default for State {
             form: None,
             confirm: None,
             stats: Vec::new(),
-            error: None,
+            sync: SyncStatus::default(),
+            syncing: false,
             keys: Keys::default(),
             tags: Vec::new(),
             jobs: Vec::new(),
@@ -246,17 +264,11 @@ impl State {
         id
     }
 
-    /// Applies what call `id` brought back, or shows why it failed.
-    pub(super) fn finish(&mut self, id: u64, result: Result<Vec<Loaded>, String>) {
+    /// Applies what call `id` brought back.
+    pub(super) fn finish(&mut self, id: u64, loaded: Vec<Loaded>) {
         self.jobs.retain(|&(job, _)| job != id);
-        match result {
-            Ok(loaded) => {
-                self.error = None;
-                for loaded in loaded {
-                    self.apply(loaded);
-                }
-            }
-            Err(error) => self.error = Some(error),
+        for loaded in loaded {
+            self.apply(loaded);
         }
     }
 
@@ -279,6 +291,11 @@ impl State {
                 self.manager.replace(todo);
             }
             Loaded::Select(id) => self.manager.select(&id),
+            Loaded::Sync(sync) => {
+                self.sync = sync;
+                self.syncing = false;
+            }
+            Loaded::Pending(pending) => self.sync.pending = pending,
         }
     }
 
@@ -287,9 +304,9 @@ impl State {
         self.jobs.iter().any(|&(_, of)| of == Some(page))
     }
 
-    /// Whether a server call with a spinner is still running.
+    /// Whether a call with a spinner is still running.
     pub(super) fn is_busy(&self) -> bool {
-        self.jobs.iter().any(|(_, page)| page.is_some())
+        self.syncing || self.jobs.iter().any(|(_, page)| page.is_some())
     }
 
     /// Whether no server call at all is running.
@@ -672,7 +689,7 @@ mod tests {
         let other = Todo::new(Id("t0".into()), "flight", chrono::NaiveDate::MIN);
         let todo = Todo::new(Id("t1".into()), "visa", chrono::NaiveDate::MIN);
         let todos = Loaded::Todos("travel/japan".into(), vec![other, todo]);
-        state.finish(id, Ok(vec![todos, Loaded::Select(Id("t1".into()))]));
+        state.finish(id, vec![todos, Loaded::Select(Id("t1".into()))]);
         assert_eq!(state.manager.list.selected(), Some(1));
     }
 
@@ -689,7 +706,7 @@ mod tests {
             total: 2,
             next_due: None,
         };
-        state.finish(id, Ok(vec![Loaded::Stats(vec![row.clone()])]));
+        state.finish(id, vec![Loaded::Stats(vec![row.clone()])]);
         assert!(!state.is_busy());
         assert_eq!(state.stats, vec![row]);
     }
@@ -702,17 +719,25 @@ mod tests {
         assert!(!state.is_busy());
         assert!(!state.is_loading(Page::Stats));
         assert!(!state.is_idle());
-        state.finish(id, Ok(Vec::new()));
+        state.finish(id, Vec::new());
         assert!(state.is_idle());
     }
 
     #[test]
-    fn a_failed_call_stops_loading_and_shows_why() {
+    fn a_sync_stops_the_spinner_and_keeps_pending_counts() {
         let mut state = with_notes();
-        let id = state.start(&Action::LoadTodos, false);
-        state.finish(id, Err("server is down".into()));
+        state.syncing = true;
+        assert!(state.is_busy());
+        let sync = SyncStatus {
+            problem: Some("offline".into()),
+            pending: 2,
+            refused: None,
+        };
+        state.finish(0, vec![Loaded::Sync(sync)]);
         assert!(!state.is_busy());
-        assert_eq!(state.error.as_deref(), Some("server is down"));
+        state.finish(1, vec![Loaded::Pending(3)]);
+        assert_eq!(state.sync.pending, 3);
+        assert_eq!(state.sync.problem.as_deref(), Some("offline"));
     }
 
     #[test]
@@ -722,7 +747,7 @@ mod tests {
         state.manager.open(Some("travel/japan".into()));
         let todo = Todo::new(Id("a1".into()), "milk", chrono::NaiveDate::MIN);
         let todos = Loaded::Todos("projects/todo/main".into(), vec![todo]);
-        state.finish(id, Ok(vec![todos]));
+        state.finish(id, vec![todos]);
         assert!(state.manager.todos.is_empty());
     }
 

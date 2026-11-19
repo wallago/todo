@@ -5,13 +5,11 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Gauge, HighlightSpacing, List, ListState, Padding, Paragraph, Wrap,
-    },
+    widgets::{Block, BorderType, Gauge, HighlightSpacing, List, ListState, Padding, Paragraph},
 };
 
 use super::{
-    state::{Focus, Page, State},
+    state::{Focus, Page, State, SyncStatus},
     theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, HIGHLIGHT, INFO, PRIMARY, SECONDARY, UNACCENT},
 };
 
@@ -55,7 +53,8 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
         .border_style(ACCENT)
         .fg(PRIMARY)
         .bg(BACKGROUND)
-        .title(title);
+        .title(title)
+        .title(Line::from(sync_status(&state.sync)).right_aligned());
     frame.render_widget(block, frame.area());
     let [sidebar, page] = Layout::horizontal([Constraint::Length(24), Constraint::Min(0)])
         .margin(2)
@@ -68,8 +67,6 @@ pub(super) fn render(state: &mut State, frame: &mut Frame) {
     let blank = state.page != Page::Manager || state.manager.todos.is_empty();
     if let Some(spinner) = loading.filter(|_| blank) {
         render_loading(state.page.name(), spinner, focused, frame, page);
-    } else if let Some(error) = &state.error {
-        render_error(error, frame, page);
     } else {
         let today = chrono::Local::now().date_naive();
         match state.page {
@@ -202,12 +199,24 @@ fn render_loading(title: &str, spinner: &str, focused: bool, frame: &mut Frame, 
     frame.render_widget(text, rect);
 }
 
-/// The last server error, in place of the page.
-fn render_error(error: &str, frame: &mut Frame, rect: Rect) {
-    let text = Paragraph::new(Line::from(Span::styled(error, ERROR)))
-        .wrap(Wrap { trim: true })
-        .block(pane("error", false));
-    frame.render_widget(text, rect);
+/// `offline · 3 to send` on the right of the title bar, and the last refused change;
+/// nothing while every change is sent.
+fn sync_status(sync: &SyncStatus) -> Vec<Span<'static>> {
+    let mut parts = Vec::new();
+    if let Some(problem) = &sync.problem {
+        parts.push(problem.clone());
+    }
+    if sync.pending > 0 {
+        parts.push(format!("{} to send", sync.pending));
+    }
+    let mut spans = Vec::new();
+    if !parts.is_empty() {
+        spans.push(Span::styled(format!(" {} ", parts.join(" · ")), HIGHLIGHT));
+    }
+    if let Some(refused) = &sync.refused {
+        spans.push(Span::styled(format!(" refused: {refused} "), ERROR));
+    }
+    spans
 }
 
 /// The keys that work right now, centred on the bottom border.
@@ -408,7 +417,7 @@ mod tests {
             total: 4,
             next_due: None,
         };
-        state.finish(id, Ok(vec![Loaded::Stats(vec![row])]));
+        state.finish(id, vec![Loaded::Stats(vec![row])]);
         let loaded = screen(&mut state);
         assert!(!loaded.contains("loading…"));
         assert!(loaded.contains("1/4"));
@@ -459,11 +468,17 @@ mod tests {
     }
 
     #[test]
-    fn shows_the_server_error() {
+    fn title_shows_offline_and_changes_to_send() {
         let mut state = State {
-            error: Some("server is down".into()),
+            sync: SyncStatus {
+                problem: Some("offline".into()),
+                pending: 3,
+                refused: Some("edit a1: 404: no todo a1".into()),
+            },
             ..State::default()
         };
-        assert!(screen(&mut state).contains("server is down"));
+        let screen = screen(&mut state);
+        assert!(screen.contains("offline · 3 to send"));
+        assert!(screen.contains("refused: edit a1"));
     }
 }

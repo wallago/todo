@@ -1,6 +1,6 @@
 //! Request functions: one per server route.
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -28,6 +28,21 @@ impl Error {
     #[must_use]
     pub fn is_not_found(&self) -> bool {
         matches!(self, Self::Api { status, .. } if *status == StatusCode::NOT_FOUND)
+    }
+
+    /// `true` if the server refused the request itself, so sending it
+    /// again won't help: a 4xx other than a missing or wrong token, or
+    /// "try later". Anything else (down, timeout, 5xx) may pass next time.
+    #[must_use]
+    pub fn is_refused(&self) -> bool {
+        matches!(self, Self::Api { status, .. } if status.is_client_error()
+            && ![
+                StatusCode::UNAUTHORIZED,
+                StatusCode::FORBIDDEN,
+                StatusCode::REQUEST_TIMEOUT,
+                StatusCode::TOO_MANY_REQUESTS,
+            ]
+            .contains(status))
     }
 }
 
@@ -62,7 +77,12 @@ impl Client {
     #[must_use]
     pub fn new(base: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // Bounded, so an offline client finds out quickly.
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(15))
+                .build()
+                .unwrap_or_default(),
             base: base.trim_end_matches('/').to_owned(),
             token: None,
         }

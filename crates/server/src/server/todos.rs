@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::NaiveDate;
-use todo_client::{Changes, Id, NewTodo, Status, SyncQuery, Todo, TodoPatch, TodoQuery};
+use todo_client::{Changes, Id, NewTodo, SyncQuery, Todo, TodoPatch, TodoQuery};
 
 use super::api_error::ApiError;
 use crate::app::AppState;
@@ -60,7 +60,7 @@ async fn add(
     State(state): State<AppState>,
     Json(new): Json<NewTodo>,
 ) -> Result<(StatusCode, Json<Todo>), ApiError> {
-    let (todo, created) = state.add_todo(new)?;
+    let (todo, created) = state.add_todo(&new)?;
     let status = if created {
         StatusCode::CREATED
     } else {
@@ -111,29 +111,20 @@ impl AppState {
 
     /// Adds a todo to `new.note`. With an `id`
     /// already saved, returns that todo instead; `false` then.
-    pub(super) fn add_todo(&self, new: NewTodo) -> Result<(Todo, bool), ApiError> {
+    pub(super) fn add_todo(&self, new: &NewTodo) -> Result<(Todo, bool), ApiError> {
         check(Some(&new.text), Some(&new.tags))?;
-        let id = match new.id {
-            Some(id) if uuid::Uuid::parse_str(&id.0).is_err() => {
+        if let Some(id) = &new.id {
+            if uuid::Uuid::parse_str(&id.0).is_err() {
                 return Err(ApiError::bad_request(format!(
                     "id `{}` is not a UUID",
                     id.0
                 )));
             }
-            Some(id) => {
-                if let Some(saved) = self.store().get(&id)? {
-                    return Ok((saved, false));
-                }
-                id
+            if let Some(saved) = self.store().get(id)? {
+                return Ok((saved, false));
             }
-            None => Id(String::new()),
-        };
-        let mut todo = Todo::new(id, new.text.trim(), today());
-        todo.priority = new.priority;
-        todo.due = new.due;
-        todo.tags = new.tags;
-        todo.pinned = new.pinned;
-        todo.recur = new.recur;
+        }
+        let todo = new.to_todo(today());
         Ok((self.store().add_to(&new.note, todo)?, true))
     }
 
@@ -141,7 +132,7 @@ impl AppState {
     pub(super) fn update_todo(&self, id: &Id, patch: TodoPatch) -> Result<Todo, ApiError> {
         check(patch.text.as_deref(), patch.tags.as_deref())?;
         let today = today();
-        Ok(self.store().update(id, |todo| apply(patch, todo, today))?)
+        Ok(self.store().update(id, |todo| patch.apply(todo, today))?)
     }
 
     /// Ticks a todo.
@@ -185,44 +176,13 @@ fn check(text: Option<&str>, tags: Option<&[String]>) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Applies a patch. Status goes through `complete`/`reopen` so the done
-/// date stays right.
-fn apply(patch: TodoPatch, todo: &mut Todo, today: NaiveDate) {
-    if let Some(text) = patch.text {
-        text.trim().clone_into(&mut todo.text);
-    }
-    if let Some(priority) = patch.priority {
-        todo.priority = priority;
-    }
-    if let Some(due) = patch.due {
-        todo.due = due;
-    }
-    if let Some(tags) = patch.tags {
-        todo.tags = tags;
-    }
-    if let Some(pinned) = patch.pinned {
-        todo.pinned = pinned;
-    }
-    if let Some(recur) = patch.recur {
-        todo.recur = recur;
-    }
-    match patch.status {
-        Some(Status::Done) => todo.complete(today),
-        Some(Status::Todo) => todo.reopen(),
-        Some(status) => {
-            todo.status = status;
-            todo.done = None;
-        }
-        None => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, header};
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
+    use todo_client::Status;
     use tower::ServiceExt;
 
     use super::*;
