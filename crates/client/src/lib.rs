@@ -16,7 +16,7 @@
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-pub use todo_core::{Id, Priority, Status, Todo};
+pub use todo_core::{Id, Priority, Recur, Status, Todo, Unit};
 
 /// Request functions.
 #[cfg(feature = "http")]
@@ -45,6 +45,12 @@ pub struct NewTodo {
     /// Created if missing. The inbox note if left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Pin it: being worked on, usually with no due date.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    /// Make it come back when completed, e.g. `{"every": 1, "unit": "week"}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recur: Option<Recur>,
 }
 
 /// Query of `GET /api/todos`.
@@ -79,6 +85,16 @@ pub struct TodoPatch {
     /// New tags, replacing the old ones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// Pin or unpin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    /// New recurrence; `null` stops it.
+    #[serde(
+        default,
+        deserialize_with = "de::present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recur: Option<Option<Recur>>,
 }
 
 /// Body of every error response.

@@ -9,7 +9,7 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{due_style, list, note_name, pane};
+use super::{due_style, list, marks, note_name, pane};
 use crate::tui::{
     state::Manager,
     theme::{ACCENT, ACCENT_BIS, PRIMARY, SECONDARY},
@@ -41,7 +41,7 @@ pub(super) fn render(
     frame.render_stateful_widget(todos, rect, &mut manager.list);
 }
 
-/// `[ ] text ⏫ 2026-11-02`, dimmed once closed.
+/// `[ ] text 📌 🔁 ⏫ 2026-11-02`, dimmed once closed.
 fn row(todo: &Todo, today: NaiveDate) -> Line<'_> {
     let text = if todo.status.is_closed() {
         SECONDARY
@@ -52,6 +52,7 @@ fn row(todo: &Todo, today: NaiveDate) -> Line<'_> {
         Span::styled(format!("[{}] ", todo.status.as_char()), ACCENT),
         Span::styled(todo.text.as_str(), text),
     ];
+    spans.extend(marks(todo));
     if let Some(emoji) = todo.priority.emoji() {
         spans.push(Span::raw(format!(" {emoji}")));
     }

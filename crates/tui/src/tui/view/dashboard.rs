@@ -10,7 +10,7 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{due_style, list, note_name, pane};
+use super::{due_style, list, marks, note_name, pane};
 use crate::tui::{
     state::{Dashboard, DueTodo},
     theme::{ACCENT, ACCENT_BIS, HIGHLIGHT, PRIMARY, SECONDARY},
@@ -42,10 +42,10 @@ pub(super) fn render(
         open,
     );
 
-    let title = format!("due ({})", dashboard.due.len());
+    let title = format!("pinned & due ({})", dashboard.due.len());
     if dashboard.due.is_empty() {
-        let empty =
-            Paragraph::new(Span::styled("Nothing due", SECONDARY)).block(pane(&title, focused));
+        let empty = Paragraph::new(Span::styled("Nothing pinned or due", SECONDARY))
+            .block(pane(&title, focused));
         frame.render_widget(empty, due);
         return;
     }
@@ -78,13 +78,15 @@ fn tile(label: &str, value: Span<'_>, frame: &mut Frame, rect: Rect) {
     frame.render_widget(text, rect);
 }
 
-/// `2026-11-11  text ⏫   note`, the date coloured by [`due_style`].
+/// `2026-11-11  text ⏫   note`, the date coloured by [`due_style`];
+/// `📌` in the date column when pinned with no date.
 fn row(due: &DueTodo, today: NaiveDate, width: usize) -> Line<'_> {
     let todo = &due.todo;
     let date = due_style(todo, today);
     let mut spans = vec![
         Span::styled(
-            todo.due.map(|day| day.to_string()).unwrap_or_default(),
+            todo.due
+                .map_or_else(|| format!("{:<9}", "📌"), |day| day.to_string()),
             date,
         ),
         Span::raw("  "),
@@ -100,9 +102,10 @@ fn row(due: &DueTodo, today: NaiveDate, width: usize) -> Line<'_> {
     Line::from(spans)
 }
 
-/// The todo's text, then its priority emoji if any.
+/// The todo's text, its pin and repeat marks, then its priority emoji.
 fn label(todo: &Todo) -> Line<'_> {
     let mut spans = vec![Span::styled(todo.text.as_str(), PRIMARY)];
+    spans.extend(marks(todo));
     if let Some(emoji) = todo.priority.emoji() {
         spans.push(Span::raw(format!(" {emoji}")));
     }

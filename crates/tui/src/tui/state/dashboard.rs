@@ -5,7 +5,7 @@ use todo_client::Todo;
 
 use super::manager::step;
 
-/// An open todo with a due date, and the note it lives in.
+/// An open todo that is pinned or has a due date, and the note it lives in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct DueTodo {
     /// Note path, like `projects/todo.md`.
@@ -21,7 +21,7 @@ pub(in crate::tui) struct Dashboard {
     pub(in crate::tui) done: usize,
     /// Todos still open.
     pub(in crate::tui) open: usize,
-    /// Open todos with a due date, soonest first.
+    /// Open pinned todos, then open todos with a due date, soonest first.
     pub(in crate::tui) due: Vec<DueTodo>,
     /// Selected row of [`Self::due`].
     pub(in crate::tui) list: ListState,
@@ -40,7 +40,7 @@ impl Dashboard {
                     continue;
                 }
                 self.open += 1;
-                if todo.due.is_some() {
+                if todo.due.is_some() || todo.pinned {
                     self.due.push(DueTodo {
                         note: note.clone(),
                         todo,
@@ -48,8 +48,9 @@ impl Dashboard {
                 }
             }
         }
-        self.due
-            .sort_by(|a, b| (a.todo.due, &a.note).cmp(&(b.todo.due, &b.note)));
+        self.due.sort_by(|a, b| {
+            (!a.todo.pinned, a.todo.due, &a.note).cmp(&(!b.todo.pinned, b.todo.due, &b.note))
+        });
         let at = self.list.selected().unwrap_or(0);
         self.list.select(if self.due.is_empty() {
             None
@@ -97,15 +98,22 @@ mod tests {
                     todo("undated", None, Status::Todo),
                 ],
             ),
-            ("b.md".into(), vec![todo("soon", Some(2), Status::Todo)]),
+            (
+                "b.md".into(),
+                vec![todo("soon", Some(2), Status::Todo), {
+                    let mut pinned = todo("pinned", None, Status::Todo);
+                    pinned.pinned = true;
+                    pinned
+                }],
+            ),
         ]);
-        assert_eq!((dashboard.done, dashboard.open), (1, 3));
+        assert_eq!((dashboard.done, dashboard.open), (1, 4));
         let ids: Vec<_> = dashboard
             .due
             .iter()
             .map(|due| due.todo.text.as_str())
             .collect();
-        assert_eq!(ids, ["soon", "late"]);
+        assert_eq!(ids, ["pinned", "soon", "late"]);
         assert_eq!(
             dashboard.selected().map(|due| due.note.as_str()),
             Some("b.md")

@@ -61,7 +61,8 @@ async fn update(
     Ok(Json(state.update_todo(&Id(id), patch)?))
 }
 
-/// `POST /api/todos/{id}/complete`: ticks it. Safe to retry.
+/// `POST /api/todos/{id}/complete`: ticks it. Safe to retry. A recurring
+/// todo also gets its next one added.
 async fn complete(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -97,6 +98,8 @@ impl AppState {
         todo.priority = new.priority;
         todo.due = new.due;
         todo.tags = new.tags;
+        todo.pinned = new.pinned;
+        todo.recur = new.recur;
         let mut store = self.store();
         Ok(match new.note {
             Some(note) => store.add_to(&note, todo)?,
@@ -163,6 +166,12 @@ fn apply(patch: TodoPatch, todo: &mut Todo, today: NaiveDate) {
     }
     if let Some(tags) = patch.tags {
         todo.tags = tags;
+    }
+    if let Some(pinned) = patch.pinned {
+        todo.pinned = pinned;
+    }
+    if let Some(recur) = patch.recur {
+        todo.recur = recur;
     }
     match patch.status {
         Some(Status::Done) => todo.complete(today),
@@ -312,6 +321,45 @@ mod tests {
         .await;
         assert_eq!(body["status"], "todo");
         assert_eq!(body.get("done"), None);
+    }
+
+    #[tokio::test]
+    async fn pin_and_recur_over_the_api() {
+        let (_state, app) = test_app(NOTE);
+        let new = json!({"text": "gym", "pinned": true, "recur": {"every": 2, "unit": "day"}});
+        let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["pinned"], true);
+        assert_eq!(body["recur"], json!({"every": 2, "unit": "day"}));
+        let id = body["id"].as_str().unwrap_or_default().to_owned();
+
+        let (_, done) = send(
+            &app,
+            Method::POST,
+            &format!("/api/todos/{id}/complete"),
+            None,
+        )
+        .await;
+        assert_eq!(done["status"], "done");
+        let (_, todos) = send(&app, Method::GET, "/api/todos", None).await;
+        let gyms: Vec<&Value> = todos
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| t["text"] == "gym")
+            .collect();
+        assert_eq!(gyms.len(), 2, "{todos}");
+        let next = gyms[1];
+        assert_eq!(next["status"], "todo");
+        assert_eq!(
+            next["due"],
+            json!((today() + chrono::Days::new(2)).to_string())
+        );
+
+        let patch = json!({"pinned": false, "recur": null});
+        let uri = format!("/api/todos/{}", next["id"].as_str().unwrap_or_default());
+        let (_, body) = send(&app, Method::PATCH, &uri, Some(patch)).await;
+        assert_eq!((body.get("pinned"), body.get("recur")), (None, None));
     }
 
     #[tokio::test]

@@ -37,7 +37,10 @@ One SQLite file (`[database] path`, created on first start), migrated with `PRAG
 
 - `notes`: `id` (UUID), `name` (unique, like `projects/todo/main.md`), `created_at`, `updated_at`, `deleted_at`.
 - `todos`: `id`, `note_id`, `text`, `status`, `priority`, `due`, `done`, `tags` (JSON list),
-  `created_at`, `updated_at`, `deleted_at`.
+  `pinned`, `recur` (JSON, like `{"every": 2, "unit": "week"}`), `created_at`, `updated_at`, `deleted_at`.
+- Pinned: being worked on, usually with no due date; listed first in the TUI.
+- Recurring: completing one adds the next, due one interval after its due date (or after today).
+  The done one stops recurring, so reopening it can't add a second copy.
 - New ids are UUIDv7; todos imported from Obsidian keep their `^abc123` block id.
 - Deleting only sets `deleted_at`, so offline clients can sync it later. Ids are never reused.
 - Timestamps are RFC 3339 UTC text, so they sort as text.

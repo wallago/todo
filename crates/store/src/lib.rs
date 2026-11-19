@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
-use todo_core::{Id, Todo};
+use todo_core::{Id, Recur, Status, Todo};
 use uuid::Uuid;
 
 /// What can go wrong in the store.
@@ -61,6 +61,8 @@ CREATE TABLE todos (
     due        TEXT,
     done       TEXT,
     tags       TEXT NOT NULL DEFAULT '[]',
+    pinned     INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+    recur      TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     deleted_at TEXT
@@ -69,9 +71,9 @@ CREATE INDEX todos_note_id ON todos(note_id);
 CREATE INDEX todos_updated_at ON todos(updated_at);
 "];
 
-/// Columns read into a [`Todo`] by [`read_todo`], with its note's name last.
-const TODO_COLUMNS: &str =
-    "t.id, t.text, t.status, t.priority, t.due, t.done, t.tags, t.created_at, n.name";
+/// Columns read into a [`Todo`] by [`read_todo`]; column 8 is its note's name.
+const TODO_COLUMNS: &str = "t.id, t.text, t.status, t.priority, t.due, t.done, t.tags, \
+     t.created_at, n.name, t.pinned, t.recur";
 
 /// The todo database.
 #[derive(Debug)]
@@ -197,19 +199,35 @@ impl Store {
 
     /// Changes a todo. Its id can't change. Returns it as saved.
     ///
+    /// Completing a recurring todo also adds the next one to its note (see
+    /// [`todo_core::Recur::follow_up`]); the done one stops recurring, so
+    /// reopening and completing it again doesn't add a second copy.
+    ///
     /// # Errors
     ///
     /// [`Error::NotFound`] if no todo has this id, [`Error::Db`] on failure.
     pub fn update(&mut self, id: &Id, change: impl FnOnce(&mut Todo)) -> Result<Todo> {
+        let now = now();
         let tx = self.conn.transaction()?;
         let mut todo = get(&tx, id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
         let before = todo.clone();
         change(&mut todo);
         todo.id = id.clone();
+        let completed = before.status != Status::Done && todo.status == Status::Done;
+        if let (true, Some(recur)) = (completed, todo.recur.take()) {
+            let today = todo.done.unwrap_or_else(|| Local::now().date_naive());
+            let mut next = recur.follow_up(&todo, today);
+            next.id = Id(Uuid::now_v7().to_string());
+            let note_id: String =
+                tx.query_row("SELECT note_id FROM todos WHERE id = ?1", [&id.0], |row| {
+                    row.get(0)
+                })?;
+            insert(&tx, &note_id, &next, &now)?;
+        }
         if todo != before {
             tx.execute(
                 "UPDATE todos SET text = ?2, status = ?3, priority = ?4, due = ?5,
-                 done = ?6, tags = ?7, updated_at = ?8 WHERE id = ?1",
+                 done = ?6, tags = ?7, pinned = ?8, recur = ?9, updated_at = ?10 WHERE id = ?1",
                 params![
                     todo.id.0,
                     todo.text,
@@ -218,7 +236,9 @@ impl Store {
                     todo.due,
                     todo.done,
                     tags_to_sql(&todo.tags),
-                    now(),
+                    todo.pinned,
+                    recur_to_sql(todo.recur),
+                    now,
                 ],
             )?;
         }
@@ -365,8 +385,9 @@ fn ensure_note(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
 fn insert(tx: &Transaction<'_>, note_id: &str, todo: &Todo, now: &str) -> Result<()> {
     let created_at = todo.created.map_or_else(|| now.to_owned(), local_midnight);
     tx.execute(
-        "INSERT INTO todos (id, note_id, text, status, priority, due, done, tags, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO todos (id, note_id, text, status, priority, due, done, tags, pinned, recur,
+                            created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             todo.id.0,
             note_id,
@@ -376,6 +397,8 @@ fn insert(tx: &Transaction<'_>, note_id: &str, todo: &Todo, now: &str) -> Result
             todo.due,
             todo.done,
             tags_to_sql(&todo.tags),
+            todo.pinned,
+            recur_to_sql(todo.recur),
             created_at,
             now,
         ],
@@ -387,6 +410,7 @@ fn insert(tx: &Transaction<'_>, note_id: &str, todo: &Todo, now: &str) -> Result
 fn read_todo(row: &Row<'_>) -> rusqlite::Result<Todo> {
     let created_at: String = row.get(7)?;
     let tags: String = row.get(6)?;
+    let recur: Option<String> = row.get(10)?;
     Ok(Todo {
         id: Id(row.get(0)?),
         text: row.get(1)?,
@@ -401,7 +425,17 @@ fn read_todo(row: &Row<'_>) -> rusqlite::Result<Todo> {
                 .with_timezone(&Local)
                 .date_naive(),
         ),
+        pinned: row.get(9)?,
+        recur: recur
+            .map(|recur| serde_json::from_str(&recur))
+            .transpose()
+            .map_err(|e| bad_column(10, e))?,
     })
+}
+
+/// A recurrence as JSON, like `{"every":2,"unit":"week"}`.
+fn recur_to_sql(recur: Option<Recur>) -> Option<String> {
+    recur.and_then(|recur| serde_json::to_string(&recur).ok())
 }
 
 /// A unit enum as its serde name, like `in_progress`.
@@ -492,7 +526,7 @@ fn find_notes(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use todo_core::{Priority, Status};
+    use todo_core::{Priority, Unit};
 
     use super::*;
 
@@ -606,6 +640,51 @@ mod tests {
             store.update(&id("zzz"), |_| {}),
             Err(Error::NotFound(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_and_recur_are_saved() -> Result<()> {
+        let mut store = store();
+        let mut todo = Todo::new(id("a"), "a", today());
+        todo.pinned = true;
+        todo.recur = Some(Recur {
+            every: 2,
+            unit: Unit::Month,
+        });
+        assert_eq!(store.add(todo.clone())?, todo);
+        let saved = store.update(&id("a"), |t| {
+            t.pinned = false;
+            t.recur = None;
+        })?;
+        assert_eq!((saved.pinned, saved.recur), (false, None));
+        assert_eq!(store.get(&id("a"))?, Some(saved));
+        Ok(())
+    }
+
+    #[test]
+    fn completing_a_recurring_todo_adds_the_next_one_once() -> Result<()> {
+        let mut store = store();
+        let mut todo = Todo::new(id("a"), "water plants", today());
+        todo.due = NaiveDate::from_ymd_opt(2026, 10, 20);
+        todo.recur = Some(Recur {
+            every: 1,
+            unit: Unit::Week,
+        });
+        store.add_to("home.md", todo)?;
+        let done = store.update(&id("a"), |t| t.complete(today()))?;
+        assert_eq!((done.status, done.recur), (Status::Done, None));
+        // Completing again, or reopening and completing, adds nothing more.
+        store.update(&id("a"), |t| t.complete(today()))?;
+        store.update(&id("a"), Todo::reopen)?;
+        store.update(&id("a"), |t| t.complete(today()))?;
+        let todos = store.todos_by_note(Some("home.md"))?;
+        assert_eq!(todos.len(), 2);
+        let next = &todos[1].1;
+        assert_eq!(next.text, "water plants");
+        assert_eq!(next.status, Status::Todo);
+        assert_eq!(next.due, NaiveDate::from_ymd_opt(2026, 10, 27));
+        assert!(next.recur.is_some());
         Ok(())
     }
 

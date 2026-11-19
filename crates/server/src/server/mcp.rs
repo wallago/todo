@@ -48,12 +48,16 @@ pub(super) struct ListArgs {
     tag: Option<String>,
     /// Only todos in this note, like `travel/japan.md`. See `list_notes`.
     note: Option<String>,
+    /// Only pinned todos (being worked on, usually without a due date).
+    #[serde(default)]
+    pinned: bool,
 }
 
 impl ListArgs {
     /// `true` if `todo` passes every filter.
     fn keeps(&self, todo: &Todo) -> bool {
         (self.all || !todo.status.is_closed())
+            && (!self.pinned || todo.pinned)
             && self
                 .query
                 .as_ref()
@@ -114,7 +118,7 @@ impl Todos {
 
     /// Lists todos.
     #[tool(
-        description = "List todos with the note each is in. Open ones only unless `all` is true; filter by text with `query`, by `tag`, or by `note`.",
+        description = "List todos with the note each is in. Open ones only unless `all` is true; filter by text with `query`, by `tag`, by `note`, or `pinned` only.",
         annotations(read_only_hint = true)
     )]
     async fn list_todos(&self, Parameters(args): Parameters<ListArgs>) -> Answer {
@@ -141,7 +145,7 @@ impl Todos {
 
     /// Adds a todo.
     #[tool(
-        description = "Add a todo to the inbox note, or to `note` (created if missing). It is always tagged `claude`. Returns it with its new id."
+        description = "Add a todo to the inbox note, or to `note` (created if missing). `pinned` marks work in progress with no deadline; `recur` (e.g. {\"every\": 1, \"unit\": \"week\"}) makes it come back when completed. It is always tagged `claude`. Returns it with its new id."
     )]
     async fn add_todo(&self, Parameters(mut new): Parameters<NewTodo>) -> Answer {
         if !new.tags.iter().any(|tag| tag == CLAUDE_TAG) {
@@ -160,7 +164,10 @@ impl Todos {
     }
 
     /// Ticks a todo.
-    #[tool(description = "Mark a todo done.", annotations(idempotent_hint = true))]
+    #[tool(
+        description = "Mark a todo done. A recurring one also gets its next occurrence added, due one interval later.",
+        annotations(idempotent_hint = true)
+    )]
     async fn complete_todo(&self, Parameters(args): Parameters<IdArgs>) -> Answer {
         json(&self.state.complete_todo(&args.id).map_err(err)?)
     }
@@ -226,6 +233,8 @@ mod tests {
             created: None,
             done: None,
             tags: vec!["errand".into()],
+            pinned: false,
+            recur: None,
         }
     }
 
@@ -245,6 +254,7 @@ mod tests {
         assert!(!args(r#"{"query": "bread"}"#).keeps(&open));
         assert!(args(r##"{"tag": "#errand"}"##).keeps(&open));
         assert!(!args(r#"{"tag": "work"}"#).keeps(&open));
+        assert!(!args(r#"{"pinned": true}"#).keeps(&open));
     }
 
     #[tokio::test]

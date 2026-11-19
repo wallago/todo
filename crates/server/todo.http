@@ -60,6 +60,18 @@ Content-Type: application/json
   "note": "projects/dongle.md"
 }
 
+### Add a pinned, weekly todo with no due date
+# @name add_recurring
+POST {{host}}/api/todos
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "text": "Water the plants",
+  "pinned": true,
+  "recur": { "every": 1, "unit": "week" }
+}
+
 ### Change some fields; "due": null clears the date
 # @name update
 PATCH {{host}}/api/todos/a1b2c3

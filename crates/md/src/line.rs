@@ -1,7 +1,7 @@
 //! One task line: `- [ ] text ⏫ ➕ 2026-10-24 📅 2026-10-30 #tag ^id`.
 
 use chrono::NaiveDate;
-use todo_core::{Id, Priority, Status, Todo};
+use todo_core::{Id, Priority, Recur, Status, Todo, Unit};
 
 /// Date format used by the Tasks plugin.
 const DATE: &str = "%Y-%m-%d";
@@ -56,7 +56,16 @@ fn parse_body(status: Status, body: &str) -> Todo {
     let mut priority = None;
     let (mut due, mut created, mut done) = (None, None, None);
     let mut tags = Vec::new();
+    let mut recur = None;
     while let Some((head, word)) = split_last(rest) {
+        if recur.is_none()
+            && let Some((head, found)) = rest.rsplit_once('🔁')
+            && let Some(found) = parse_recur(found)
+        {
+            recur = Some(found);
+            rest = head;
+            continue;
+        }
         if priority.is_none()
             && let Some(p) = priority_from_emoji(word)
         {
@@ -94,7 +103,32 @@ fn parse_body(status: Status, body: &str) -> Todo {
         created,
         done,
         tags,
+        pinned: false,
+        recur,
     }
+}
+
+/// Reads the Tasks plugin's `every week`, `every 2 days`... (after `🔁`).
+/// `when done` is accepted and ignored. Anything else, like `every
+/// Monday`, is `None`, and stays in the text.
+fn parse_recur(src: &str) -> Option<Recur> {
+    let mut words: Vec<&str> = src.split_whitespace().collect();
+    if words.ends_with(&["when", "done"]) {
+        words.truncate(words.len() - 2);
+    }
+    let (every, unit) = match words.as_slice() {
+        ["every", unit] => (1, *unit),
+        ["every", n, unit] => (n.parse().ok().filter(|n| *n > 0)?, *unit),
+        _ => return None,
+    };
+    let unit = match unit.trim_end_matches('s') {
+        "day" => Unit::Day,
+        "week" => Unit::Week,
+        "month" => Unit::Month,
+        "year" => Unit::Year,
+        _ => return None,
+    };
+    Some(Recur { every, unit })
 }
 
 /// Splits off the last whitespace-separated word.
@@ -155,6 +189,32 @@ mod tests {
         assert_eq!(todo.created, NaiveDate::from_ymd_opt(2026, 10, 22));
         assert_eq!(todo.due, NaiveDate::from_ymd_opt(2026, 10, 25));
         assert_eq!(todo.tags, ["dev", "todo-app"]);
+        Ok(())
+    }
+
+    #[test]
+    fn reads_recurrence() -> Result<(), &'static str> {
+        let (_, todo) =
+            parse_line("- [ ] Water plants 🔁 every 2 weeks when done 📅 2026-11-20 #home ^p1")
+                .ok_or("not a task")?;
+        assert_eq!(todo.text, "Water plants");
+        assert_eq!(
+            todo.recur,
+            Some(Recur {
+                every: 2,
+                unit: Unit::Week
+            })
+        );
+        assert_eq!(todo.due, NaiveDate::from_ymd_opt(2026, 11, 20));
+        assert_eq!(todo.tags, ["home"]);
+        let (_, todo) = parse_line("- [ ] Gym 🔁 every day").ok_or("not a task")?;
+        assert_eq!(todo.recur.map(|r| (r.every, r.unit)), Some((1, Unit::Day)));
+        // Not understood: kept as text.
+        let (_, todo) = parse_line("- [ ] Bins 🔁 every Monday").ok_or("not a task")?;
+        assert_eq!(
+            (todo.text.as_str(), todo.recur),
+            ("Bins 🔁 every Monday", None)
+        );
         Ok(())
     }
 
