@@ -1,16 +1,25 @@
 //! Terminal user interface, styled like praline's.
 
-use std::time::Duration;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError},
+    time::Duration,
+};
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use todo_client::{Client, Status, Todo, TodoPatch};
 use tokio::{
-    sync::mpsc::{self, UnboundedSender},
+    sync::{
+        Mutex,
+        mpsc::{self, UnboundedSender},
+    },
     time::{self, Instant, MissedTickBehavior},
 };
 
 use crate::{config::Keys, prelude::*};
 
+/// Local copy of the todos and the changes not sent yet.
+mod replica;
 /// What the UI shows, and how keys change it.
 mod state;
 /// Colour palette shared by every widget.
@@ -18,7 +27,8 @@ mod theme;
 /// Widget renderer.
 mod view;
 
-use state::{Action, Loaded, NoteStats, Page, State};
+use replica::{Op, Replica};
+use state::{Action, Loaded, NoteStats, Page, State, SyncStatus};
 
 /// Puts the terminal back however [`run`] ends: quit, error, or another
 /// component stopping first and dropping it mid-loop.
@@ -35,17 +45,21 @@ const TICK: Duration = Duration::from_millis(100);
 /// How often the notes and the open page reload on their own.
 const AUTO_REFRESH: Duration = Duration::from_secs(30);
 
-/// What a server call sends back to the event loop: its id and result.
-type Done = (u64, std::result::Result<Vec<Loaded>, String>);
+/// What a sync sends back to the event loop: its id and what it loaded.
+type Done = (u64, Vec<Loaded>);
 
-/// Draws, then waits for a key, a finished server call or a spinner tick,
-/// until the user quits. Server calls run on their own task, so the UI
-/// never waits for them.
+/// Draws, then waits for a key, a finished sync or a spinner tick, until
+/// the user quits. Reads and changes go to the local [`Replica`] at once;
+/// syncs with the server run on their own task, so the UI never waits.
 ///
 /// # Errors
 ///
 /// Returns an error if the terminal can't be set up, drawn to, or read from.
-pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
+pub(super) async fn run(client: &Client, server: &str, keys: Keys) -> Result<()> {
+    let shared = Arc::new(Shared {
+        replica: StdMutex::new(Replica::load(&replica_path(), server)),
+        syncing: Mutex::new(()),
+    });
     let mut terminal = ratatui::try_init()?;
     let _restore = Restore;
     let mut events = read_events();
@@ -58,14 +72,19 @@ pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
         keys,
         ..State::default()
     };
-    spawn(client, &mut state, Action::Refresh, false, &done_tx);
+    let link = Link {
+        client,
+        shared: &shared,
+        done: &done_tx,
+    };
+    link.spawn(&mut state, Action::Refresh, false);
     while state.running {
         terminal.draw(|frame| view::render(&mut state, frame))?;
         tokio::select! {
             event = events.recv() => match event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                     if let Some(action) = state.on_key(key) {
-                        spawn(client, &mut state, action, false, &done_tx);
+                        link.spawn(&mut state, action, false);
                     }
                 }
                 // Anything else (resize, focus, ...) just redraws.
@@ -73,51 +92,98 @@ pub(super) async fn run(client: &Client, keys: Keys) -> Result<()> {
                 Some(Err(error)) => return Err(error.into()),
                 None => break,
             },
-            Some((id, result)) = done.recv() => state.finish(id, result),
+            Some((id, loaded)) = done.recv() => state.finish(id, loaded),
             _ = ticks.tick(), if state.is_busy() => state.tick = state.tick.wrapping_add(1),
-            // Quiet, and skipped while another call runs, so a slow server
+            // Quiet, and skipped while another sync runs, so a slow server
             // doesn't pile them up.
-            _ = refresh.tick(), if state.is_idle() => {
-                spawn(client, &mut state, Action::Refresh, true, &done_tx);
-            }
+            _ = refresh.tick(), if state.is_idle() => link.spawn(&mut state, Action::Refresh, true),
         }
     }
     Ok(())
 }
 
-/// Runs `action` against the server on its own task, the result coming
-/// back through `done`; a `quiet` one shows no spinner. A failure is
-/// shown, not returned, so a server that's down doesn't close the app.
-fn spawn(
-    client: &Client,
-    state: &mut State,
-    action: Action,
-    quiet: bool,
-    done: &UnboundedSender<Done>,
-) {
-    let id = state.start(&action, quiet);
-    let job = Job {
-        note: state.manager.note.clone(),
-        notes: state.notes.clone(),
-        selected: state.manager.selected().cloned(),
-        stats: state.page == Page::Stats || state.picker.is_some(),
-        dashboard: state.page == Page::Dashboard,
-    };
-    let client = client.clone();
-    let done = done.clone();
-    tokio::spawn(async move {
-        let what = format!("{action:?}");
-        let result = load(&client, job, action).await.map_err(|error| {
-            let error = with_causes(&error);
-            tracing::warn!("{what} failed: {error}");
-            error
-        });
-        // Only fails once the app is closing.
-        let _ = done.send((id, result));
-    });
+/// `<data dir>/todo-tui/replica.json`.
+fn replica_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(env!("CARGO_PKG_NAME"))
+        .join("replica.json")
 }
 
-/// What a server call needs from the state, copied when it starts.
+/// The replica, shared with the sync task.
+#[derive(Debug)]
+struct Shared {
+    /// The local copy. Held only briefly, never across a server call.
+    replica: StdMutex<Replica>,
+    /// Held for a whole sync, so two never send the same change at once.
+    syncing: Mutex<()>,
+}
+
+impl Shared {
+    /// The replica, even if a task panicked holding it.
+    fn lock(&self) -> MutexGuard<'_, Replica> {
+        self.replica.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// What [`Link::spawn`] needs, borrowed from [`run`].
+struct Link<'a> {
+    /// The server.
+    client: &'a Client,
+    /// The local copy.
+    shared: &'a Arc<Shared>,
+    /// Where syncs send what they bring back.
+    done: &'a UnboundedSender<Done>,
+}
+
+impl Link<'_> {
+    /// Runs `action`: on the replica right away, then, for a refresh or a
+    /// change, a sync with the server on its own task. A `quiet` refresh
+    /// shows no spinner.
+    fn spawn(&self, state: &mut State, action: Action, quiet: bool) {
+        let job = Job {
+            note: state.manager.note.clone(),
+            notes: state.notes.clone(),
+            selected: state.manager.selected().cloned(),
+            stats: state.page == Page::Stats || state.picker.is_some(),
+            dashboard: state.page == Page::Dashboard,
+        };
+        let sync = matches!(
+            action,
+            Action::Refresh
+                | Action::Toggle
+                | Action::Add(..)
+                | Action::Change(..)
+                | Action::Delete(_)
+        );
+        let id = state.start(&action, true);
+        let loaded = {
+            let mut replica = self.shared.lock();
+            let loaded = local(&mut replica, &job, action);
+            replica.save();
+            loaded
+        };
+        state.finish(id, loaded);
+        if !sync {
+            return;
+        }
+        // Any sync on screen turns the title spinner until it's back.
+        state.syncing |= !quiet;
+        let id = state.start(&Action::Refresh, true);
+        let client = self.client.clone();
+        let shared = Arc::clone(self.shared);
+        let done = self.done.clone();
+        tokio::spawn(async move {
+            let status = sync_with(&client, &shared).await;
+            let mut loaded = vec![Loaded::Sync(status)];
+            loaded.extend(local(&mut shared.lock(), &job, Action::Refresh));
+            // Only fails once the app is closing.
+            let _ = done.send((id, loaded));
+        });
+    }
+}
+
+/// What an action needs from the state, copied when it starts.
 struct Job {
     /// The manager's note.
     note: Option<String>,
@@ -131,121 +197,170 @@ struct Job {
     dashboard: bool,
 }
 
-/// The server calls behind [`spawn`].
-async fn load(client: &Client, job: Job, action: Action) -> todo_client::Result<Vec<Loaded>> {
+/// Runs `action` on the replica, returning what changed on screen.
+fn local(replica: &mut Replica, job: &Job, action: Action) -> Vec<Loaded> {
+    let today = chrono::Local::now().date_naive();
     let mut loaded = Vec::new();
     match action {
         Action::Refresh => {
-            let notes = client.notes().await?;
+            let notes = replica.notes();
             // With no note open, the manager opens the first one.
-            let note = job.note.or_else(|| notes.first().cloned());
+            let note = job.note.clone().or_else(|| notes.first().cloned());
             if job.stats {
-                loaded.push(load_stats(client, &notes).await?);
+                loaded.push(load_stats(replica, &notes));
             }
             if job.dashboard {
-                loaded.push(load_dashboard(client, &notes).await?);
+                loaded.push(load_dashboard(replica, &notes));
             }
             loaded.push(Loaded::Notes(notes));
-            loaded.push(Loaded::Tags(client.list().await?));
-            loaded.extend(load_todos(client, note).await?);
+            loaded.push(Loaded::Tags(replica.all()));
+            loaded.extend(load_todos(replica, note));
         }
-        Action::LoadTodos => loaded.extend(load_todos(client, job.note).await?),
-        Action::LoadStats => loaded.push(load_stats(client, &job.notes).await?),
-        Action::LoadDashboard => loaded.push(load_dashboard(client, &job.notes).await?),
+        Action::LoadTodos => loaded.extend(load_todos(replica, job.note.clone())),
+        Action::LoadStats => loaded.push(load_stats(replica, &job.notes)),
+        Action::LoadDashboard => loaded.push(load_dashboard(replica, &job.notes)),
         Action::Jump(id) => {
-            loaded.extend(load_todos(client, job.note).await?);
+            loaded.extend(load_todos(replica, job.note.clone()));
             loaded.push(Loaded::Select(id));
         }
         Action::Toggle => {
-            if let Some(todo) = job.selected {
-                let toggled = if todo.status.is_closed() {
-                    let reopen = TodoPatch {
-                        status: Some(Status::Todo),
-                        ..TodoPatch::default()
-                    };
-                    client.update(&todo.id, &reopen).await?
+            if let Some(todo) = &job.selected {
+                // Ticking a recurring todo adds its next one on the server,
+                // which comes back with the sync that follows.
+                let status = if todo.status.is_closed() {
+                    Status::Todo
                 } else {
-                    client.complete(&todo.id).await?
+                    Status::Done
                 };
-                loaded.push(Loaded::Changed(toggled));
-                // Completing a recurring todo added its next one.
-                if todo.recur.is_some() && !todo.status.is_closed() {
-                    loaded.extend(load_todos(client, job.note).await?);
-                }
+                let patch = TodoPatch {
+                    status: Some(status),
+                    ..TodoPatch::default()
+                };
+                loaded.extend(replica.update(&todo.id, patch, today).map(Loaded::Changed));
             }
         }
         Action::Add(mut new, status) => {
             // `a` only opens the form with a note open.
             new.note = job.note.clone().unwrap_or_default();
-            let added = client.add(&new).await?;
-            // New todos start unticked; set any other status after.
-            if status != Status::Todo {
-                let patch = TodoPatch {
-                    status: Some(status),
-                    ..TodoPatch::default()
-                };
-                client.update(&added.id, &patch).await?;
-            }
+            let added = replica.add(new, status, today);
             // A first todo creates its note, so the list may have grown.
-            loaded.push(Loaded::Notes(client.notes().await?));
-            loaded.extend(load_todos(client, job.note).await?);
+            loaded.push(Loaded::Notes(replica.notes()));
+            loaded.extend(load_todos(replica, job.note.clone()));
             loaded.push(Loaded::Select(added.id));
         }
         Action::Change(id, patch) => {
-            let changed = client.update(&id, &patch).await?;
-            loaded.push(Loaded::Changed(changed));
-            // Completing a recurring todo may have added its next one.
-            if patch.status == Some(Status::Done) {
-                loaded.extend(load_todos(client, job.note).await?);
-            }
+            loaded.extend(replica.update(&id, patch, today).map(Loaded::Changed));
         }
         Action::Delete(id) => {
-            client.remove(&id).await?;
-            loaded.extend(load_todos(client, job.note).await?);
+            replica.delete(&id);
+            loaded.extend(load_todos(replica, job.note.clone()));
         }
     }
-    Ok(loaded)
+    loaded.push(Loaded::Pending(replica.pending()));
+    loaded
 }
 
-/// Reloads `note`'s todos, if a note is open.
-async fn load_todos(client: &Client, note: Option<String>) -> todo_client::Result<Option<Loaded>> {
-    Ok(match note {
-        Some(note) => {
-            let todos = client.list_note(&note).await?;
-            Some(Loaded::Todos(note, todos))
-        }
-        None => None,
+/// `note`'s todos, if a note is open.
+fn load_todos(replica: &Replica, note: Option<String>) -> Option<Loaded> {
+    note.map(|note| {
+        let todos = replica.todos(&note);
+        Loaded::Todos(note, todos)
     })
 }
 
-/// Reloads every note's counts and next due date.
-async fn load_stats(client: &Client, notes: &[String]) -> todo_client::Result<Loaded> {
-    let mut rows = Vec::with_capacity(notes.len());
-    for note in notes {
-        let todos = client.list_note(note).await?;
-        let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
-        let next_due = todos
-            .iter()
-            .filter(|todo| !todo.status.is_closed())
-            .filter_map(|todo| todo.due)
-            .min();
-        rows.push(NoteStats {
-            note: note.clone(),
-            done,
-            total: todos.len(),
-            next_due,
-        });
-    }
-    Ok(Loaded::Stats(rows))
+/// Every note's counts and next due date.
+fn load_stats(replica: &Replica, notes: &[String]) -> Loaded {
+    let rows = notes
+        .iter()
+        .map(|note| {
+            let todos = replica.todos(note);
+            let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
+            let next_due = todos
+                .iter()
+                .filter(|todo| !todo.status.is_closed())
+                .filter_map(|todo| todo.due)
+                .min();
+            NoteStats {
+                note: note.clone(),
+                done,
+                total: todos.len(),
+                next_due,
+            }
+        })
+        .collect();
+    Loaded::Stats(rows)
 }
 
-/// Reloads every note's todos, for the dashboard.
-async fn load_dashboard(client: &Client, notes: &[String]) -> todo_client::Result<Loaded> {
-    let mut all = Vec::with_capacity(notes.len());
-    for note in notes {
-        all.push((note.clone(), client.list_note(note).await?));
+/// Every note's todos, for the dashboard.
+fn load_dashboard(replica: &Replica, notes: &[String]) -> Loaded {
+    let all = notes
+        .iter()
+        .map(|note| (note.clone(), replica.todos(note)))
+        .collect();
+    Loaded::Dashboard(all)
+}
+
+/// Sends the queued changes, oldest first, then takes in what changed on
+/// the server. Stops at the first change the server can't take right now
+/// (down, timeout, bad token), keeping it queued for next time; a change
+/// it refuses outright is dropped and undone here.
+async fn sync_with(client: &Client, shared: &Shared) -> SyncStatus {
+    let _one = shared.syncing.lock().await;
+    let mut status = SyncStatus::default();
+    if let Err(error) = push_pull(client, shared, &mut status).await {
+        tracing::warn!("sync failed: {}", with_causes(&error));
+        status.problem = Some(match error {
+            todo_client::Error::Http(_) => "offline".to_owned(),
+            todo_client::Error::Api { .. } => error.to_string(),
+        });
     }
-    Ok(Loaded::Dashboard(all))
+    let replica = shared.lock();
+    replica.save();
+    status.pending = replica.pending();
+    status
+}
+
+/// The steps of [`sync_with`], stopping at the first error.
+async fn push_pull(
+    client: &Client,
+    shared: &Shared,
+    status: &mut SyncStatus,
+) -> todo_client::Result<()> {
+    loop {
+        let next = shared.lock().next();
+        let Some(pending) = next else { break };
+        match send(client, &pending.op).await {
+            Ok(()) => shared.lock().sent(pending.seq),
+            Err(error) if error.is_refused() => {
+                let why = format!("{}: {error}", pending.op.describe());
+                tracing::warn!("refused: {why}");
+                status.refused = Some(why);
+                shared.lock().refused(pending.seq);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut since = shared.lock().since();
+    let mut changes = client.sync(since).await?;
+    // A cursor going back means a new database: start over.
+    if changes.cursor < since {
+        since = 0;
+        changes = client.sync(0).await?;
+    }
+    shared.lock().merge(changes, since);
+    Ok(())
+}
+
+/// Sends one queued change. Deleting a todo already gone is fine.
+async fn send(client: &Client, op: &Op) -> todo_client::Result<()> {
+    match op {
+        Op::Add(new) => client.add(new).await.map(drop),
+        Op::Update(id, patch) => client.update(id, patch).await.map(drop),
+        Op::Delete(id) => match client.remove(id).await {
+            Err(error) if error.is_not_found() => Ok(()),
+            result => result,
+        },
+    }
 }
 
 /// `error: cause: cause...`, since reqwest hides the useful part in the sources.

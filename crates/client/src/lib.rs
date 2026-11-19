@@ -108,6 +108,60 @@ pub struct TodoPatch {
     pub recur: Option<Option<Recur>>,
 }
 
+impl TodoPatch {
+    /// Applies the fields that are set to `todo`. Status goes through
+    /// `complete`/`reopen` so the done date stays right. The server and
+    /// offline clients both use it, so they agree.
+    pub fn apply(self, todo: &mut Todo, today: NaiveDate) {
+        if let Some(text) = self.text {
+            text.trim().clone_into(&mut todo.text);
+        }
+        if let Some(priority) = self.priority {
+            todo.priority = priority;
+        }
+        if let Some(due) = self.due {
+            todo.due = due;
+        }
+        if let Some(tags) = self.tags {
+            todo.tags = tags;
+        }
+        if let Some(pinned) = self.pinned {
+            todo.pinned = pinned;
+        }
+        if let Some(recur) = self.recur {
+            todo.recur = recur;
+        }
+        match self.status {
+            Some(Status::Done) => todo.complete(today),
+            Some(Status::Todo) => todo.reopen(),
+            Some(status) => {
+                todo.status = status;
+                todo.done = None;
+            }
+            None => {}
+        }
+    }
+}
+
+impl NewTodo {
+    /// The todo this adds, as the server saves it: trimmed text, created
+    /// `today`, open. Its id is `self.id`, or empty for the server to fill.
+    #[must_use]
+    pub fn to_todo(&self, today: NaiveDate) -> Todo {
+        let mut todo = Todo::new(
+            self.id.clone().unwrap_or(Id(String::new())),
+            self.text.trim(),
+            today,
+        );
+        todo.priority = self.priority;
+        todo.due = self.due;
+        todo.tags.clone_from(&self.tags);
+        todo.pinned = self.pinned;
+        todo.recur = self.recur;
+        todo
+    }
+}
+
 /// Body of every error response.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorBody {

@@ -56,6 +56,12 @@ One SQLite file (`[database] path`, created on first start), migrated with `PRAG
   the saved todo (200) instead of a copy. `DELETE` of a deleted todo answers 204. `complete` was already safe to retry.
 - Conflicts: the last write the server receives wins. Fine for one person.
 
+The TUI works offline: it keeps a copy of every todo in `~/.local/share/todo-tui/replica.json`
+(one server at a time), and queues each add, edit, tick and delete there. It sends the queue then
+pulls `/api/sync` after each change, every 30 s and on `r`. The title bar shows `offline · 3 to send`
+until it gets through. A change the server refuses (a todo deleted elsewhere, say) is dropped, shown as
+`refused: ...`, and undone by a full resync. Ticking a recurring todo offline: its next one appears once synced.
+
 ### Import from Obsidian
 
 Once, to move an old vault in (never writes to the vault; safe to run again, known ids are skipped):

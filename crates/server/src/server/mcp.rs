@@ -151,7 +151,7 @@ impl Todos {
         if !new.tags.iter().any(|tag| tag == CLAUDE_TAG) {
             new.tags.push(CLAUDE_TAG.into());
         }
-        json(&self.state.add_todo(new).map_err(err)?.0)
+        json(&self.state.add_todo(&new).map_err(err)?.0)
     }
 
     /// Changes some fields.
