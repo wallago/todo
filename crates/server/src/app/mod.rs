@@ -16,8 +16,8 @@ pub(crate) struct AppState {
 
 impl AppState {
     /// Opens the database.
-    pub(crate) fn open(path: &Path, inbox: &str) -> Result<Self> {
-        Ok(Self::new(Store::open(path, inbox)?))
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        Ok(Self::new(Store::open(path)?))
     }
 
     /// Wraps an already open store.

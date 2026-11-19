@@ -42,7 +42,7 @@ GET {{host}}/api/todos/a1b2c3
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Add a todo (goes to the inbox note)
+### Add a todo to a note (created if missing)
 # @name add
 POST {{host}}/api/todos
 Authorization: Bearer {{token}}
@@ -50,6 +50,7 @@ Content-Type: application/json
 
 {
   "text": "Buy milk",
+  "note": "errands",
   "priority": "high",
   "due": "2026-10-30",
   "tags": ["errand"]

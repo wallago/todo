@@ -8,7 +8,7 @@
 //! use todo_client::{Client, NewTodo};
 //!
 //! let client = Client::new("http://127.0.0.1:3000");
-//! let todo = client.add(&NewTodo { text: "buy milk".into(), ..NewTodo::default() }).await?;
+//! let todo = client.add(&NewTodo { text: "buy milk".into(), note: "errands".into(), ..NewTodo::default() }).await?;
 //! client.complete(&todo.id).await?;
 //! # Ok(())
 //! # }
@@ -46,10 +46,8 @@ pub struct NewTodo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Note to add it to, like `projects/dev`.
-    /// Created if missing. The inbox note if left out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    /// Note to add it to, like `projects/dev`. Created if missing.
+    pub note: String,
     /// Pin it: being worked on, usually with no due date.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
@@ -154,9 +152,14 @@ mod tests {
     }
 
     #[test]
-    fn new_todo_needs_only_text() {
-        let new: NewTodo = serde_json::from_str(r#"{"text": "buy milk"}"#).expect("json");
-        assert_eq!(new.text, "buy milk");
+    fn new_todo_needs_only_text_and_note() {
+        let new: NewTodo =
+            serde_json::from_str(r#"{"text": "buy milk", "note": "errands"}"#).expect("json");
+        assert_eq!(
+            (new.text.as_str(), new.note.as_str()),
+            ("buy milk", "errands")
+        );
         assert_eq!(new.priority, Priority::Normal);
+        assert!(serde_json::from_str::<NewTodo>(r#"{"text": "buy milk"}"#).is_err());
     }
 }

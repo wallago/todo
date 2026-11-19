@@ -54,7 +54,7 @@ async fn one(
     todo.map(Json).ok_or_else(|| ApiError::not_found(&id))
 }
 
-/// `POST /api/todos`: adds a todo to the inbox note, or to `note`. Answers
+/// `POST /api/todos`: adds a todo to `note`. Answers
 /// 201, or 200 with the saved todo if `id` was already added.
 async fn add(
     State(state): State<AppState>,
@@ -109,7 +109,7 @@ impl AppState {
         Ok(self.store().notes()?)
     }
 
-    /// Adds a todo to the inbox note, or to `new.note`. With an `id`
+    /// Adds a todo to `new.note`. With an `id`
     /// already saved, returns that todo instead; `false` then.
     pub(super) fn add_todo(&self, new: NewTodo) -> Result<(Todo, bool), ApiError> {
         check(Some(&new.text), Some(&new.tags))?;
@@ -134,12 +134,7 @@ impl AppState {
         todo.tags = new.tags;
         todo.pinned = new.pinned;
         todo.recur = new.recur;
-        let mut store = self.store();
-        let saved = match new.note {
-            Some(note) => store.add_to(&note, todo)?,
-            None => store.add(todo)?,
-        };
-        Ok((saved, true))
+        Ok((self.store().add_to(&new.note, todo)?, true))
     }
 
     /// Changes the fields that are set in `patch`.
@@ -283,9 +278,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_writes_to_the_inbox() {
+    async fn add_writes_to_its_note() {
         let (state, app) = test_app(NOTE);
-        let new = json!({"text": " buy milk ", "priority": "high", "tags": ["errand"]});
+        let new =
+            json!({"note": "todo", "text": " buy milk ", "priority": "high", "tags": ["errand"]});
         let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
         let todo: Todo = serde_json::from_value(body).expect("todo");
@@ -323,12 +319,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_needs_a_note() {
+        let (_state, app) = test_app(NOTE);
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(json!({"text": "x"}))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let new = json!({"text": "x", "note": ""});
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn add_refuses_text_that_breaks_the_line() {
         let (_state, app) = test_app(NOTE);
         for new in [
-            json!({"text": "  "}),
-            json!({"text": "two\nlines"}),
-            json!({"text": "ok", "tags": ["two words"]}),
+            json!({"note": "todo", "text": "  "}),
+            json!({"note": "todo", "text": "two\nlines"}),
+            json!({"note": "todo", "text": "ok", "tags": ["two words"]}),
         ] {
             let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
             assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -338,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn patch_changes_only_what_is_sent() {
         let (state, app) = test_app(NOTE);
-        let patch = json!({"text": "a, renamed", "due": null});
+        let patch = json!({"note": "todo", "text": "a, renamed", "due": null});
         let (status, body) = send(&app, Method::PATCH, "/api/todos/aaaaaa", Some(patch)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["text"], "a, renamed");
@@ -364,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn pin_and_recur_over_the_api() {
         let (_state, app) = test_app(NOTE);
-        let new = json!({"text": "gym", "pinned": true, "recur": {"every": 2, "unit": "day"}});
+        let new = json!({"note": "todo", "text": "gym", "pinned": true, "recur": {"every": 2, "unit": "day"}});
         let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(body["pinned"], true);
@@ -438,12 +444,12 @@ mod tests {
         let (_, todos) = send(&app, Method::GET, "/api/todos?note=phone", None).await;
         assert_eq!(todos.as_array().map(Vec::len), Some(1));
 
-        let bad = json!({"id": "not-a-uuid", "text": "x"});
+        let bad = json!({"id": "not-a-uuid", "text": "x", "note": "todo"});
         let (status, _) = send(&app, Method::POST, "/api/todos", Some(bad)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         // A deleted id can't come back.
         send(&app, Method::DELETE, &format!("/api/todos/{id}"), None).await;
-        let new = json!({"id": id, "text": "offline"});
+        let new = json!({"id": id, "text": "offline", "note": "todo"});
         let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CONFLICT);
     }
@@ -490,7 +496,7 @@ mod tests {
         assert_eq!(client.list().await?.len(), 2);
         let new = NewTodo {
             text: "buy milk".into(),
-            note: Some("errands/shop".into()),
+            note: "errands/shop".into(),
             ..NewTodo::default()
         };
         let todo = client.add(&new).await?;

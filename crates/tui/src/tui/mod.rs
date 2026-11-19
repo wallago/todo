@@ -175,7 +175,8 @@ async fn load(client: &Client, job: Job, action: Action) -> todo_client::Result<
             }
         }
         Action::Add(mut new, status) => {
-            new.note.clone_from(&job.note);
+            // `a` only opens the form with a note open.
+            new.note = job.note.clone().unwrap_or_default();
             let added = client.add(&new).await?;
             // New todos start unticked; set any other status after.
             if status != Status::Todo {

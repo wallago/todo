@@ -110,19 +110,15 @@ const TODO_COLUMNS: &str = "t.id, t.text, t.status, t.priority, t.due, t.done, t
 pub struct Store {
     /// Open connection.
     conn: Connection,
-    /// Note that new todos go to when none is given.
-    inbox: String,
 }
 
 impl Store {
     /// Opens the database file, creating it and its tables if missing.
-    /// New todos without a note go to `inbox`.
     ///
     /// # Errors
     ///
-    /// [`Error::Db`] if the file can't be opened or migrated,
-    /// [`Error::BadNote`] if `inbox` is not a note name.
-    pub fn open(path: impl AsRef<Path>, inbox: impl Into<String>) -> Result<Self> {
+    /// [`Error::Db`] if the file can't be opened or migrated.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             fs::create_dir_all(dir).map_err(|source| Error::Io {
@@ -133,7 +129,7 @@ impl Store {
         let conn = Connection::open(path)?;
         // WAL lets `todo-server import` write while the server reads.
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        Self::setup(conn, &inbox.into())
+        Self::setup(conn)
     }
 
     /// A database in memory, for tests.
@@ -141,17 +137,16 @@ impl Store {
     /// # Errors
     ///
     /// As [`Store::open`].
-    pub fn open_in_memory(inbox: impl Into<String>) -> Result<Self> {
-        Self::setup(Connection::open_in_memory()?, &inbox.into())
+    pub fn open_in_memory() -> Result<Self> {
+        Self::setup(Connection::open_in_memory()?)
     }
 
     /// Settings and migrations shared by both `open`s.
-    fn setup(mut conn: Connection, inbox: &str) -> Result<Self> {
-        let inbox = note_name(inbox)?;
+    fn setup(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         migrate(&mut conn)?;
-        Ok(Self { conn, inbox })
+        Ok(Self { conn })
     }
 
     /// Every todo with its note's name, note by note, in the order they were
@@ -193,16 +188,6 @@ impl Store {
     /// [`Error::Db`] if the query fails.
     pub fn get(&self, id: &Id) -> Result<Option<Todo>> {
         get(&self.conn, id)
-    }
-
-    /// Adds a todo to the inbox note. Otherwise like [`Store::add_to`].
-    ///
-    /// # Errors
-    ///
-    /// As [`Store::add_to`].
-    pub fn add(&mut self, todo: Todo) -> Result<Todo> {
-        let inbox = self.inbox.clone();
-        self.add_to(&inbox, todo)
     }
 
     /// Adds a todo to `note`, creating the note if it is missing. A todo
@@ -635,9 +620,9 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 10, 25).unwrap_or_default()
     }
 
-    /// An empty store with `todo.md` as inbox.
+    /// An empty store.
     fn store() -> Store {
-        Store::open_in_memory("todo").expect("store")
+        Store::open_in_memory().expect("store")
     }
 
     /// A temp vault holding `files` as (path, content).
@@ -658,7 +643,7 @@ mod tests {
         todo.priority = Priority::High;
         todo.due = NaiveDate::from_ymd_opt(2026, 10, 30);
         todo.tags = vec!["errand".into(), "dev/rust".into()];
-        let saved = store.add(todo.clone())?;
+        let saved = store.add_to("todo", todo.clone())?;
         assert!(Uuid::parse_str(&saved.id.0).is_ok(), "{}", saved.id.0);
         todo.id = saved.id.clone();
         assert_eq!(saved, todo);
@@ -711,11 +696,11 @@ mod tests {
                 "{note}"
             );
         }
-        store.add(Todo::new(id("a"), "a", today()))?;
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         store.remove(&id("a"))?;
         // Even a deleted todo keeps its id.
         assert!(matches!(
-            store.add(Todo::new(id("a"), "again", today())),
+            store.add_to("todo", Todo::new(id("a"), "again", today())),
             Err(Error::DuplicateId(_))
         ));
         Ok(())
@@ -724,7 +709,7 @@ mod tests {
     #[test]
     fn update_changes_fields_but_not_the_id() -> Result<()> {
         let mut store = store();
-        store.add(Todo::new(id("a"), "a", today()))?;
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         let saved = store.update(&id("a"), |t| {
             t.complete(today());
             t.id = id("other");
@@ -748,7 +733,7 @@ mod tests {
             every: 2,
             unit: Unit::Month,
         });
-        assert_eq!(store.add(todo.clone())?, todo);
+        assert_eq!(store.add_to("todo", todo.clone())?, todo);
         let saved = store.update(&id("a"), |t| {
             t.pinned = false;
             t.recur = None;
@@ -787,7 +772,7 @@ mod tests {
     #[test]
     fn remove_hides_the_todo_but_keeps_the_row() -> Result<()> {
         let mut store = store();
-        store.add(Todo::new(id("a"), "a", today()))?;
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         assert_eq!(store.remove(&id("a"))?.text, "a");
         assert_eq!(store.get(&id("a"))?, None);
         assert!(store.todos_by_note(None)?.is_empty());
@@ -804,7 +789,7 @@ mod tests {
     #[test]
     fn changes_since_a_cursor() -> Result<()> {
         let mut store = store();
-        store.add(Todo::new(id("a"), "a", today()))?;
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         store.add_to("b", Todo::new(id("b"), "b", today()))?;
         let all = store.changes(0)?;
         assert_eq!(all.notes.len(), 2);
@@ -836,8 +821,8 @@ mod tests {
     fn reopening_the_file_keeps_everything() -> Result<()> {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("state/todo.db");
-        let todo = Store::open(&path, "todo.md")?.add(Todo::new(id("a"), "a", today()))?;
-        assert_eq!(Store::open(&path, "todo.md")?.get(&id("a"))?, Some(todo));
+        let todo = Store::open(&path)?.add_to("todo", Todo::new(id("a"), "a", today()))?;
+        assert_eq!(Store::open(&path)?.get(&id("a"))?, Some(todo));
         Ok(())
     }
 

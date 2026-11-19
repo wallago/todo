@@ -65,10 +65,7 @@ in
           server.port = 3000;
           # Public HTTPS URL: turns on OAuth for claude.ai connectors (needs tokenFile).
           server.publicUrl = "https://todo.wallago.xyz";
-          database = {
-            path = "/var/lib/todo/todo.db";
-            inbox = "misc";
-          };
+          database.path = "/var/lib/todo/todo.db";
           # Host names MCP clients use for /mcp.
           mcp.allowedHosts = [
             "localhost"

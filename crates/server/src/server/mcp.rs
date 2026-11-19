@@ -145,7 +145,7 @@ impl Todos {
 
     /// Adds a todo.
     #[tool(
-        description = "Add a todo to the inbox note, or to `note` (created if missing). `pinned` marks work in progress with no deadline; `recur` (e.g. {\"every\": 1, \"unit\": \"week\"}) makes it come back when completed. It is always tagged `claude`. Returns it with its new id."
+        description = "Add a todo to `note` (created if missing; see list_notes). `pinned` marks work in progress with no deadline; `recur` (e.g. {\"every\": 1, \"unit\": \"week\"}) makes it come back when completed. It is always tagged `claude`. Returns it with its new id."
     )]
     async fn add_todo(&self, Parameters(mut new): Parameters<NewTodo>) -> Answer {
         if !new.tags.iter().any(|tag| tag == CLAUDE_TAG) {
@@ -259,10 +259,10 @@ mod tests {
 
     #[tokio::test]
     async fn list_shows_and_filters_notes() {
-        let mut store = todo_store::Store::open_in_memory("todo").expect("store");
+        let mut store = todo_store::Store::open_in_memory().expect("store");
         let today = chrono::NaiveDate::default();
         store
-            .add(Todo::new(Id("aaaaaa".into()), "a", today))
+            .add_to("todo", Todo::new(Id("aaaaaa".into()), "a", today))
             .expect("add");
         store
             .add_to("travel", Todo::new(Id("bbbbbb".into()), "b", today))
@@ -283,17 +283,21 @@ mod tests {
 
     #[tokio::test]
     async fn add_tags_claude_once() {
-        let store = todo_store::Store::open_in_memory("todo").expect("store");
+        let store = todo_store::Store::open_in_memory().expect("store");
         let state = AppState::new(store);
         let todos = Todos::new(state.clone());
         let add = |json: &str| serde_json::from_str::<NewTodo>(json).expect("json");
 
         todos
-            .add_todo(Parameters(add(r#"{"text": "a", "tags": ["dev"]}"#)))
+            .add_todo(Parameters(add(
+                r#"{"text": "a", "note": "todo", "tags": ["dev"]}"#,
+            )))
             .await
             .expect("added");
         todos
-            .add_todo(Parameters(add(r#"{"text": "b", "tags": ["claude"]}"#)))
+            .add_todo(Parameters(add(
+                r#"{"text": "b", "note": "todo", "tags": ["claude"]}"#,
+            )))
             .await
             .expect("added");
         let tags: Vec<Vec<String>> = state

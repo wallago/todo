@@ -108,7 +108,7 @@ impl Client {
         send(self.request(Method::GET, Some(id))).await
     }
 
-    /// Adds a todo to the inbox note, or to `new.note`. Returns it with its
+    /// Adds a todo to `new.note`. Returns it with its
     /// new id.
     pub async fn add(&self, new: &NewTodo) -> Result<Todo> {
         send(self.request(Method::POST, None).json(new)).await
