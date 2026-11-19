@@ -3,10 +3,8 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-/// Stable identifier, written as an Obsidian block id (`^k3x9a2`).
-///
-/// Survives edits to the text, so the TUI, MCP and desk display can all
-/// point at the same task.
+/// Stable identifier: a UUID, or the Obsidian block id (`k3x9a2`) of a todo
+/// imported from a vault. Treat it as an opaque string.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(transparent)]

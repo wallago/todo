@@ -7,47 +7,54 @@ todo/
 ├── Cargo.toml            # [workspace] members = ["crates/*"]
 ├── crates/
 │   ├── core/             # Todo struct, state machine, no I/O
-│   ├── md/               # parser + serializer (md <-> core)
-│   ├── store/            # file watching, read/write vault, index
-│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the vault
+│   ├── md/               # read-only Obsidian Tasks parser, for `todo-server import`
+│   ├── store/            # SQLite database: notes, todos, vault import
+│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the database
 │   ├── client/           # wire types + request fns (shared by tui/desk)
 │   └── tui/              # ratatui client
-└── vault/                # test fixtures, sample .md
+└── vault/                # sample Obsidian note, md parser test fixture
 ```
 
 ```
-vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
-                                           ^
-                                           +---HTTP--> desk display
-                                           +---HTTP /mcp--> Claude
+todo.db (SQLite)  <-->  server  <--HTTP-->  tui
+                          ^
+                          +---HTTP--> desk display / phone widget
+                          +---HTTP /mcp--> Claude
 ```
 
 ### Keys
 
 - `core` has zero dependencies on I/O.
   Everything else depends on it.
-  This is the part that keeps the workspace from rotting.
-- Keep `md` separate from `store`.
-  The parser should be a pure `&str -> Vec<Todo> + Vec<Todo> -> String`, which makes it trivially testable and round-trippable.
-  Round-trip tests matter a lot here: a parser that loses a stray comment or reorders lines will eventually corrupt an Obsidian note you care about.
-  Write `parse(write(parse(s))) == parse(s)` as a property test early.
-- Markdown format: Obsidian Tasks plugin convention as target: `- [ ] buy milk 📅 2026-10-30 #errand` with stable id — `^abc123`.
-- MCP: use the official `rmcp` crate.
-  Expose maybe 5 tools: `list_todos`, `add_todo`, `complete_todo`, `update_todo`, `search`.
-  Resist exposing a generic "edit file" tool — the whole point is that the parser enforces format validity.
-- `server` is the only process that touches the vault.
+- `server` is the only process that opens the database.
   `store` is server-internal; the MCP tools live in the server and call the same code as the routes.
-  Two independent readers/writers means torn reads mid-write and lost updates when Obsidian saves at the same time.
 - `client` holds the wire format once.
   The server and `tui` both depend on it, so the API types can't drift between consumers.
-- The file watcher reloads the whole vault once it has been quiet for 500 ms, so sync bursts cost one reload.
-  The server's own writes wake it too, which is harmless: the store keeps no state beyond the files, and every write re-reads its note first.
-- Incoming Syncthing/Obsidian Sync changes are just external edits.
-  Same code path as editing the vault in Obsidian on another device.
+
+### Database
+
+One SQLite file (`[database] path`, created on first start), migrated with `PRAGMA user_version`.
+
+- `notes`: `id` (UUID), `name` (unique, like `projects/todo/main.md`), `created_at`, `updated_at`, `deleted_at`.
+- `todos`: `id`, `note_id`, `text`, `status`, `priority`, `due`, `done`, `tags` (JSON list),
+  `created_at`, `updated_at`, `deleted_at`.
+- New ids are UUIDv7; todos imported from Obsidian keep their `^abc123` block id.
+- Deleting only sets `deleted_at`, so offline clients can sync it later. Ids are never reused.
+- Timestamps are RFC 3339 UTC text, so they sort as text.
+
+### Import from Obsidian
+
+Once, to move an old vault in (never writes to the vault; safe to run again, known ids are skipped):
+
+```sh
+todo-server --config config.toml import ~/vault
+# or straight at the file:
+todo-server import ~/vault --db /var/lib/todo/todo.db
+```
 
 ### Deployment
 
-- Server runs on the always-on box that holds the vault, as a systemd user service.
+- Server runs on the always-on box that holds the database, as a systemd service.
 - Static bearer token on the API, kept in a config file.
   Ten lines of work, and it means exposing over Tailscale later needs no redesign.
   Never bind `0.0.0.0` without it.
@@ -63,15 +70,6 @@ vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
   Substantially less work than microcontroller firmware.
 - Read-only by default — skips a lot of conflict handling.
   If ticking off from the device is wanted: `POST /api/todos/:id/complete`, idempotent, because the device will retry on flaky wifi.
-
-### Build order
-
-1. `core` + `md` with round-trip tests
-2. `store`
-3. `server` + `client`
-4. `tui` — the thing used daily
-5. `mcp`
-6. desk display endpoint
 
 ## MCP
 

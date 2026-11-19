@@ -38,17 +38,16 @@ impl ApiError {
 
 impl From<todo_store::Error> for ApiError {
     fn from(error: todo_store::Error) -> Self {
-        use todo_md::Error as Md;
         use todo_store::Error as Store;
         match error {
-            Store::Md(Md::NotFound(id)) => Self::not_found(&id.0),
-            Store::Md(error) => Self(StatusCode::CONFLICT, error.to_string()),
+            Store::NotFound(id) => Self::not_found(&id.0),
+            Store::DuplicateId(_) => Self(StatusCode::CONFLICT, error.to_string()),
             Store::BadNote(_) => Self::bad_request(error.to_string()),
-            Store::Io { .. } => {
+            Store::Db(_) | Store::Io { .. } => {
                 tracing::error!("{error}");
                 Self(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "could not read or write the vault".to_owned(),
+                    "could not read or write the database".to_owned(),
                 )
             }
         }

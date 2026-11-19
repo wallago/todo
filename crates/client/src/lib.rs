@@ -41,7 +41,7 @@ pub struct NewTodo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Note to add it to, relative to the vault, like `projects/dev.md`.
+    /// Note to add it to, like `projects/dev.md`.
     /// Created if missing. The inbox note if left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,

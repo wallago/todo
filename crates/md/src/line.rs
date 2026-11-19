@@ -28,32 +28,6 @@ pub fn parse_line(line: &str) -> Option<(&str, Todo)> {
     Some((prefix, parse_body(Status::from_char(mark), body)))
 }
 
-/// Writes a todo as a task line, after `prefix` (use `"- "` for a new task).
-#[must_use]
-pub fn write_line(prefix: &str, todo: &Todo) -> String {
-    let mut line = format!("{prefix}[{}]", todo.status.as_char());
-    let mut push = |part: &str| {
-        if !part.is_empty() {
-            line.push(' ');
-            line.push_str(part);
-        }
-    };
-    push(&todo.text);
-    push(todo.priority.emoji().unwrap_or_default());
-    for (emoji, date) in [("➕", todo.created), ("📅", todo.due), ("✅", todo.done)] {
-        if let Some(date) = date {
-            push(&format!("{emoji} {date}"));
-        }
-    }
-    for tag in &todo.tags {
-        push(&format!("#{tag}"));
-    }
-    if !todo.id.0.is_empty() {
-        push(&format!("^{}", todo.id.0));
-    }
-    line
-}
-
 /// Strips a list bullet (`-`, `*`, `+`, `1.`, `1)`) and the space after it.
 fn strip_bullet(s: &str) -> Option<&str> {
     let rest = match s.chars().next()? {
@@ -165,7 +139,6 @@ fn priority_from_emoji(word: &str) -> Option<Priority> {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
 
     use super::*;
 
@@ -182,7 +155,6 @@ mod tests {
         assert_eq!(todo.created, NaiveDate::from_ymd_opt(2026, 10, 22));
         assert_eq!(todo.due, NaiveDate::from_ymd_opt(2026, 10, 25));
         assert_eq!(todo.tags, ["dev", "todo-app"]);
-        assert_eq!(write_line(prefix, &todo), line);
         Ok(())
     }
 
@@ -208,56 +180,5 @@ mod tests {
         assert!(todo.tags.is_empty());
         assert_eq!(todo.due, None);
         Ok(())
-    }
-
-    /// Any todo with ordinary text survives write then parse unchanged.
-    fn arb_todo() -> impl Strategy<Value = Todo> {
-        let status = prop_oneof![
-            Just(Status::Todo),
-            Just(Status::InProgress),
-            Just(Status::Done),
-            Just(Status::Cancelled),
-        ];
-        let priority = prop_oneof![
-            Just(Priority::Lowest),
-            Just(Priority::Low),
-            Just(Priority::Normal),
-            Just(Priority::Medium),
-            Just(Priority::High),
-            Just(Priority::Highest),
-        ];
-        let date = (2000i32..2100, 1u32..=12, 1u32..=28)
-            .prop_map(|(y, m, d)| NaiveDate::from_ymd_opt(y, m, d).unwrap_or_default());
-        (
-            "([a-z0-9]{6})?",
-            "[A-Za-z]([A-Za-z0-9 ,.!?']{0,30}[A-Za-z.!?])?",
-            status,
-            priority,
-            proptest::option::of(date.clone()),
-            proptest::option::of(date.clone()),
-            proptest::option::of(date),
-            proptest::collection::vec("[a-z][a-z0-9/_-]{0,8}", 0..3),
-        )
-            .prop_map(
-                |(id, text, status, priority, due, created, done, tags)| Todo {
-                    id: Id(id),
-                    text,
-                    status,
-                    priority,
-                    due,
-                    created,
-                    done,
-                    tags,
-                },
-            )
-    }
-
-    proptest! {
-        #[test]
-        fn write_then_parse_round_trips(todo in arb_todo(), indent in "[ \t]{0,4}") {
-            let prefix = format!("{indent}- ");
-            let line = write_line(&prefix, &todo);
-            prop_assert_eq!(parse_line(&line), Some((prefix.as_str(), todo)));
-        }
     }
 }

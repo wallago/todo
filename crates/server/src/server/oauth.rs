@@ -492,7 +492,7 @@ mod tests {
     const BASE: &str = "https://todo.example.com";
     const CALLBACK: &str = "https://claude.ai/api/mcp/auth_callback";
 
-    fn app() -> (tempfile::TempDir, Router) {
+    fn app() -> (crate::app::AppState, Router) {
         let main = Token::from_static("secret");
         let tokens = Tokens {
             oauth: Some(Issuer::new(BASE, main.clone())),
@@ -562,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn unauthorized_mcp_points_to_metadata() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         let (status, response) = send(&app, get("/mcp", None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(
@@ -583,7 +583,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_accepts_claude_only() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         let register = |uris: serde_json::Value| {
             Request::post("/oauth/register")
                 .header(header::CONTENT_TYPE, "application/json")
@@ -599,7 +599,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_login_flow() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         let verifier = "a-long-enough-pkce-verifier-for-the-test-0123456789";
         let challenge = B64.encode(Sha256::digest(verifier.as_bytes()));
         let request = [
