@@ -12,6 +12,11 @@ target/
 # ── Local development environment ────────────────────────────
 .direnv/
 
+# ── Web / pnpm ───────────────────────────────────────────────
+node_modules/
+dist/
+*.tsbuildinfo
+
 # ── Secrets ──────────────────────────────────────────────────
 # kulala: put the prod token here, e.g. {"prod": {"token": "..."}}
 http-client.private.env.json

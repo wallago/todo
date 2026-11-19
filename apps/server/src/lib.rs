@@ -33,7 +33,7 @@ pub async fn run(args: &Args) -> Result<()> {
     }
     let config = Config::load(args.config.as_deref())?;
     let state = AppState::open(&config.database.path)?;
-    server::start(&config.server, state, &config.mcp).await?;
+    server::start(&config, state).await?;
     tracing::info!("Server stopped");
     Ok(())
 }

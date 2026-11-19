@@ -35,6 +35,7 @@ jobs:
           - crates
           - server::ci
           - tui::ci
+          - web::ci
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v7
@@ -49,6 +50,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.recipe }}
+      - name: Cache the pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
       - name: Run just ${{ matrix.recipe }}
         run: nix develop .#ci --command just ${{ matrix.recipe }}
         env:

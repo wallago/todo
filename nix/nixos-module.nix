@@ -19,7 +19,8 @@ let
       // lib.optionalAttrs (cfg.server.readTokenFile != null) {
         read_token_file = "${credentials}/read-token";
       };
-  };
+  }
+  // lib.optionalAttrs (cfg.server.web != null) { web.dir = "${cfg.server.web}"; };
   configFile = settingsFormat.generate "todo-server.toml" settings;
   vFlag = n: lib.optionalString (n > 0) "-${lib.concatStrings (lib.replicate n "v")}";
   serverPort = cfg.server.settings.server.port or 3000;
@@ -88,6 +89,15 @@ in
           File holding the bearer token for /api and /mcp, e.g. an agenix or
           sops-nix secret. It can stay root-only. A string, not a Nix path,
           so the token stays out of the Nix store. null: no auth.
+        '';
+      };
+      web = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.web;
+        defaultText = lib.literalExpression "todo.packages.\${system}.web";
+        description = ''
+          The built web app, served at / (an offline copy of the todo list
+          for phones and browsers). null: no web app.
         '';
       };
       readTokenFile = lib.mkOption {

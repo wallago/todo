@@ -12,6 +12,8 @@ pub(crate) mod database;
 pub(crate) mod mcp;
 /// Server settings.
 pub(crate) mod server;
+/// Web app settings.
+pub(crate) mod web;
 
 /// Configuration loaded from `config.toml`.
 #[derive(Clone, Debug, Deserialize)]
@@ -26,6 +28,9 @@ pub(crate) struct Config {
     /// MCP config.
     #[serde(default)]
     pub(crate) mcp: mcp::McpConfig,
+    /// Web app config.
+    #[serde(default)]
+    pub(crate) web: web::WebConfig,
 }
 
 impl Config {
@@ -70,6 +75,7 @@ impl Config {
             config.server.token_file = config.server.token_file.map(|file| dir.join(file));
             config.server.read_token_file =
                 config.server.read_token_file.map(|file| dir.join(file));
+            config.web.dir = config.web.dir.map(|web| dir.join(web));
         }
         Ok(config)
     }

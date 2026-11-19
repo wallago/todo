@@ -1,10 +1,12 @@
 //! Server core.
 
+use std::path::Path;
+
 use axum::{Router, http::StatusCode, middleware, routing::get, serve};
 
 use crate::{
     app::AppState,
-    config::{mcp::McpConfig, server::ServerConfig},
+    config::{Config, mcp::McpConfig},
     prelude::*,
 };
 
@@ -20,6 +22,8 @@ mod mcp;
 mod oauth;
 /// `/api/todos`.
 mod todos;
+/// The web app at `/`.
+mod web;
 
 /// Liveness probe: answers as long as the server is up.
 async fn health() -> StatusCode {
@@ -28,8 +32,14 @@ async fn health() -> StatusCode {
 
 /// Global server routes. With `tokens`, `/api` and `/mcp` need the main
 /// token (or an OAuth access token); `/api/agenda` also takes the read-only one.
-/// With OAuth on, its login routes are served too.
-fn routes(state: AppState, mcp_config: &McpConfig, tokens: Option<auth::Tokens>) -> Router {
+/// With OAuth on, its login routes are served too. With `web`, the web app
+/// in that folder answers every other path; it needs no token, its API calls do.
+fn routes(
+    state: AppState,
+    mcp_config: &McpConfig,
+    tokens: Option<auth::Tokens>,
+    web: Option<&Path>,
+) -> Router {
     let protected = Router::new()
         .merge(todos::routes())
         .nest_service("/mcp", mcp::service(state.clone(), mcp_config));
@@ -48,15 +58,17 @@ fn routes(state: AppState, mcp_config: &McpConfig, tokens: Option<auth::Tokens>)
         ),
         None => (protected, readable),
     };
+    if let Some(dir) = web {
+        router = router.merge(web::routes(dir));
+    }
     router.merge(protected).merge(readable).with_state(state)
 }
 
 /// Start web services. Returns on Ctrl-C or SIGTERM (systemd stop).
-pub(super) async fn start(
-    config: &ServerConfig,
-    state: AppState,
-    mcp_config: &McpConfig,
-) -> Result<()> {
+pub(super) async fn start(config: &Config, state: AppState) -> Result<()> {
+    let web = config.web.dir.as_deref();
+    let mcp_config = &config.mcp;
+    let config = &config.server;
     let read = config
         .read_token_file
         .as_deref()
@@ -89,7 +101,7 @@ pub(super) async fn start(
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", config.address, config.port)).await?;
     tracing::info!("Server running on {}", listener.local_addr()?);
-    serve(listener, routes(state, mcp_config, tokens))
+    serve(listener, routes(state, mcp_config, tokens, web))
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())
@@ -131,7 +143,10 @@ fn test_router(note: &str, tokens: Option<auth::Tokens>) -> (AppState, Router) {
     let mut store = todo_store::Store::open_in_memory().expect("store");
     store.import_vault(dir.path()).expect("import");
     let state = AppState::new(store);
-    (state.clone(), routes(state, &McpConfig::default(), tokens))
+    (
+        state.clone(),
+        routes(state, &McpConfig::default(), tokens, None),
+    )
 }
 
 #[cfg(test)]
@@ -150,5 +165,47 @@ mod tests {
             .expect("valid request");
         let response = app.oneshot(request).await.expect("infallible");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// `GET path` on a router serving the web app in `dir`, behind a token.
+    async fn get_web(dir: &Path, path: &str) -> axum::response::Response {
+        let mut store = todo_store::Store::open_in_memory().expect("store");
+        store.import_vault(dir).expect("import");
+        let tokens = auth::Tokens {
+            main: auth::Token::from_static("secret"),
+            read: None,
+            oauth: None,
+        };
+        let app = routes(
+            AppState::new(store),
+            &McpConfig::default(),
+            Some(tokens),
+            Some(dir),
+        );
+        let request = Request::get(path)
+            .body(Body::empty())
+            .expect("valid request");
+        app.oneshot(request).await.expect("infallible")
+    }
+
+    #[tokio::test]
+    async fn serves_the_web_app_without_a_token() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("index.html"), "<p>todo</p>").expect("write");
+        std::fs::create_dir(dir.path().join("assets")).expect("mkdir");
+        std::fs::write(dir.path().join("assets/index-abc.js"), "1").expect("write");
+
+        let page = get_web(dir.path(), "/").await;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(page.headers()["cache-control"], "no-cache");
+        let asset = get_web(dir.path(), "/assets/index-abc.js").await;
+        assert_eq!(asset.status(), StatusCode::OK);
+        assert_eq!(
+            asset.headers()["cache-control"],
+            "public, max-age=31536000, immutable"
+        );
+        // The API still wants its token.
+        let api = get_web(dir.path(), "/api/todos").await;
+        assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
     }
 }

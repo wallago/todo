@@ -18,3 +18,10 @@ updates:
     groups:
       flake-inputs:
         patterns: ["*"]
+  - package-ecosystem: "npm"
+    directory: "/apps/web"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-dependencies:
+        patterns: ["*"]
