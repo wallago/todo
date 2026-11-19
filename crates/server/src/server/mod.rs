@@ -116,22 +116,22 @@ async fn shutdown() {
     }
 }
 
-/// A router over a temp vault holding one `todo.md` note, without a token.
+/// A router over a database in memory, filled by importing `note` (Obsidian
+/// Tasks lines) as `todo.md`, the inbox. Without a token.
 #[cfg(test)]
-fn test_app(note: &str) -> (tempfile::TempDir, Router) {
+fn test_app(note: &str) -> (AppState, Router) {
     test_router(note, None)
 }
 
 /// Same as [`test_app`], with these tokens.
 #[cfg(test)]
-fn test_router(note: &str, tokens: Option<auth::Tokens>) -> (tempfile::TempDir, Router) {
+fn test_router(note: &str, tokens: Option<auth::Tokens>) -> (AppState, Router) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("todo.md"), note).expect("write note");
-    let store = todo_store::Store::open(dir.path(), "todo.md").expect("open vault");
-    (
-        dir,
-        routes(AppState::new(store), &McpConfig::default(), tokens),
-    )
+    let mut store = todo_store::Store::open_in_memory("todo.md").expect("store");
+    store.import_vault(dir.path()).expect("import");
+    let state = AppState::new(store);
+    (state.clone(), routes(state, &McpConfig::default(), tokens))
 }
 
 #[cfg(test)]
@@ -144,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_is_ok() {
-        let (_dir, app) = test_app("");
+        let (_state, app) = test_app("");
         let request = Request::get("/health")
             .body(Body::empty())
             .expect("valid request");

@@ -175,7 +175,7 @@ mod tests {
     use crate::server::test_router;
 
     /// A router whose token is `secret` and read-only token `peek`.
-    fn app() -> (tempfile::TempDir, axum::Router) {
+    fn app() -> (crate::app::AppState, axum::Router) {
         let tokens = Tokens {
             main: Token("secret".into()),
             read: Some(Token("peek".into())),
@@ -207,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_needs_the_token() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         for auth in [
             None,
             Some("Bearer wrong"),
@@ -230,7 +230,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_token_only_opens_the_agenda() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         for (uri, auth) in [
             ("/api/agenda", Some("Bearer secret")),
             ("/api/agenda", Some("Bearer peek")),
@@ -259,7 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_needs_the_token_and_health_does_not() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         let response = get(&app, "/mcp", None).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         // Past the token, the MCP service answers (here: a GET without a session).
@@ -271,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_sends_the_token() {
-        let (_dir, app) = app();
+        let (_state, app) = app();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");

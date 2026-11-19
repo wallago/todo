@@ -42,7 +42,7 @@ struct AgendaTodo {
     id: Id,
     /// What to do.
     text: String,
-    /// The note it's in, relative to the vault.
+    /// The note it's in, like `projects/dev.md`.
     note: String,
     /// Due date.
     due: NaiveDate,
@@ -54,8 +54,10 @@ struct AgendaTodo {
 
 /// `GET /api/agenda`: open todos due today or overdue.
 async fn agenda(State(state): State<AppState>) -> Response {
-    let agenda = Agenda::build(state.list_todos(None), today());
-    Json(agenda).into_response()
+    match state.list_todos(None) {
+        Ok(todos) => Json(Agenda::build(todos, today())).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 impl Agenda {
@@ -156,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn json_lists_overdue_then_today() {
-        let (_dir, app) = test_app(&note());
+        let (_state, app) = test_app(&note());
         let (status, body) = get(&app, "/api/agenda").await;
         assert_eq!(status, StatusCode::OK);
         let body: Value = serde_json::from_str(&body).expect("json");
@@ -180,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn nothing_due_says_so() {
-        let (_dir, app) = test_app("- [ ] no date ^aaaaaa\n");
+        let (_state, app) = test_app("- [ ] no date ^aaaaaa\n");
         let (status, body) = get(&app, "/api/agenda").await;
         assert_eq!(status, StatusCode::OK);
         let body: Value = serde_json::from_str(&body).expect("json");

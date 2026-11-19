@@ -134,6 +134,18 @@ fn list<'a, T: Into<ratatui::widgets::ListItem<'a>>>(
         .highlight_spacing(HighlightSpacing::Always)
 }
 
+/// ` 📌` when pinned, ` 🔁` when it repeats.
+fn marks(todo: &todo_client::Todo) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if todo.pinned {
+        spans.push(Span::raw(" 📌"));
+    }
+    if todo.recur.is_some() {
+        spans.push(Span::styled(" 🔁", SECONDARY));
+    }
+    spans
+}
+
 /// A note path without its `.md`, like `projects/todo`.
 fn note_name(note: &str) -> &str {
     note.strip_suffix(".md").unwrap_or(note)

@@ -73,10 +73,12 @@ impl Manager {
     }
 }
 
-/// To do, in progress, cancelled, then done; soonest due first in each,
-/// undated last, then highest priority, file order otherwise.
+/// Open pinned todos first; then to do, in progress, cancelled, done;
+/// soonest due first in each, undated last, then highest priority, file
+/// order otherwise.
 fn sort(todos: &mut [Todo]) {
     todos.sort_by_key(|todo| {
+        let pinned = todo.pinned && !todo.status.is_closed();
         let rank = match todo.status {
             Status::Todo => 0,
             Status::InProgress => 1,
@@ -91,7 +93,7 @@ fn sort(todos: &mut [Todo]) {
             Priority::Low => 4,
             Priority::Lowest => 5,
         };
-        (rank, todo.due.is_none(), todo.due, priority)
+        (!pinned, rank, todo.due.is_none(), todo.due, priority)
     });
 }
 
@@ -148,6 +150,17 @@ mod tests {
             order(&manager),
             ["soon", "later", "undated", "doing", "cancelled", "done"]
         );
+    }
+
+    #[test]
+    fn open_pinned_todos_come_first() {
+        let mut pinned = todo("pinned", Status::InProgress, None);
+        pinned.pinned = true;
+        let mut closed = todo("closed pin", Status::Done, None);
+        closed.pinned = true;
+        let mut manager = Manager::default();
+        manager.set_todos(vec![todo("soon", Status::Todo, Some(1)), closed, pinned]);
+        assert_eq!(order(&manager), ["pinned", "soon", "closed pin"]);
     }
 
     #[test]

@@ -14,7 +14,7 @@ GET {{host}}/api/todos?note=projects/dev.md
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Every note in the vault
+### Every note
 # @name notes
 GET {{host}}/api/notes
 Authorization: Bearer {{token}}
@@ -60,6 +60,18 @@ Content-Type: application/json
   "note": "projects/dongle.md"
 }
 
+### Add a pinned, weekly todo with no due date
+# @name add_recurring
+POST {{host}}/api/todos
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "text": "Water the plants",
+  "pinned": true,
+  "recur": { "every": 1, "unit": "week" }
+}
+
 ### Change some fields; "due": null clears the date
 # @name update
 PATCH {{host}}/api/todos/a1b2c3
@@ -77,7 +89,7 @@ Content-Type: application/json
 POST {{host}}/api/todos/a1b2c3/complete
 Authorization: Bearer {{token}}
 
-### Delete it and its line
+### Delete it
 # @name remove
 DELETE {{host}}/api/todos/a1b2c3
 Authorization: Bearer {{token}}

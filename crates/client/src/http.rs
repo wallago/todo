@@ -88,7 +88,7 @@ impl Client {
         send(self.request(Method::GET, None).query(&query)).await
     }
 
-    /// Every note's path, relative to the vault.
+    /// Every note's name, like `projects/dev.md`.
     pub async fn notes(&self) -> Result<Vec<String>> {
         send(self.call(Method::GET, "/api/notes")).await
     }

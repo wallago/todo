@@ -6,12 +6,12 @@ use serde::Deserialize;
 
 use crate::prelude::*;
 
+/// Database settings.
+pub(crate) mod database;
 /// MCP settings.
 pub(crate) mod mcp;
 /// Server settings.
 pub(crate) mod server;
-/// Vault settings.
-pub(crate) mod vault;
 
 /// Configuration loaded from `config.toml`.
 #[derive(Clone, Debug, Deserialize)]
@@ -20,8 +20,13 @@ pub(crate) struct Config {
     /// Server config.
     #[serde(default)]
     pub(crate) server: server::ServerConfig,
-    /// Vault config.
-    pub(crate) vault: vault::VaultConfig,
+    /// Database config.
+    #[serde(default)]
+    pub(crate) database: database::DatabaseConfig,
+    /// Old `[vault]` section, from before the database. Ignored with a
+    /// warning so an old config still starts. Remove once no config has it.
+    #[serde(default)]
+    pub(crate) vault: Option<toml::Value>,
     /// MCP config.
     #[serde(default)]
     pub(crate) mcp: mcp::McpConfig,
@@ -65,10 +70,17 @@ impl Config {
             .map_err(|error| Error::Config(format!("{}: {error}", path.display())))?;
         // Relative paths are relative to the config file, not the cwd.
         if let Some(dir) = path.parent() {
-            config.vault.root = dir.join(&config.vault.root);
+            config.database.path = dir.join(&config.database.path);
             config.server.token_file = config.server.token_file.map(|file| dir.join(file));
             config.server.read_token_file =
                 config.server.read_token_file.map(|file| dir.join(file));
+        }
+        if config.vault.is_some() {
+            tracing::warn!(
+                "{}: `[vault]` is no longer used, todos live in `[database] path`; \
+                 run `todo-server import <vault>` once, then remove it",
+                path.display()
+            );
         }
         Ok(config)
     }

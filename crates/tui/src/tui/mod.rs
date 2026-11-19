@@ -168,6 +168,10 @@ async fn load(client: &Client, job: Job, action: Action) -> todo_client::Result<
                     client.complete(&todo.id).await?
                 };
                 loaded.push(Loaded::Changed(toggled));
+                // Completing a recurring todo added its next one.
+                if todo.recur.is_some() && !todo.status.is_closed() {
+                    loaded.extend(load_todos(client, job.note).await?);
+                }
             }
         }
         Action::Add(mut new, status) => {
@@ -187,7 +191,12 @@ async fn load(client: &Client, job: Job, action: Action) -> todo_client::Result<
             loaded.push(Loaded::Select(added.id));
         }
         Action::Change(id, patch) => {
-            loaded.push(Loaded::Changed(client.update(&id, &patch).await?));
+            let changed = client.update(&id, &patch).await?;
+            loaded.push(Loaded::Changed(changed));
+            // Completing a recurring todo may have added its next one.
+            if patch.status == Some(Status::Done) {
+                loaded.extend(load_todos(client, job.note).await?);
+            }
         }
         Action::Delete(id) => {
             client.remove(&id).await?;

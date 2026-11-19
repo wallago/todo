@@ -24,15 +24,39 @@ use crate::config::Config;
 ///
 /// # Errors
 ///
-/// Returns an [`Error`] if the config or token can't be loaded, or the server
-/// can't bind.
+/// Returns an [`Error`] if the config, database or token can't be loaded,
+/// or the server can't bind.
 pub async fn run(args: &Args) -> Result<()> {
     better_panic::install();
+    if let Some(Command::Import { vault, db }) = &args.command {
+        return import(args, vault, db.as_deref());
+    }
     let config = Config::load(args.config.as_deref())?;
-    let state = AppState::open(&config.vault.root, &config.vault.inbox)?;
-    // Dropping it stops the watch, so keep it until the server stops.
-    let _watcher = state.watch(&config.vault.root)?;
+    let state = AppState::open(&config.database.path, &config.database.inbox)?;
     server::start(&config.server, state, &config.mcp).await?;
     tracing::info!("Server stopped");
+    Ok(())
+}
+
+/// `todo-server import`: copies a vault into the database.
+#[expect(clippy::print_stdout, reason = "the report is the command's output")]
+fn import(args: &Args, vault: &std::path::Path, db: Option<&std::path::Path>) -> Result<()> {
+    let (path, inbox) = if let Some(path) = db {
+        (
+            path.to_owned(),
+            config::database::DatabaseConfig::default().inbox,
+        )
+    } else {
+        let config = Config::load(args.config.as_deref())?;
+        (config.database.path, config.database.inbox)
+    };
+    let report = todo_store::Store::open(&path, inbox)?.import_vault(vault)?;
+    println!(
+        "{}: {} notes read, {} todos added, {} already there",
+        path.display(),
+        report.notes,
+        report.added,
+        report.skipped
+    );
     Ok(())
 }

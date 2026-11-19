@@ -9,11 +9,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Clear, ListItem, ListState, Padding, Paragraph},
 };
-use todo_client::{Priority, Status};
+use todo_client::{Priority, Recur, Status, Unit};
 
 use super::{list, pane};
 use crate::tui::{
-    state::{Field, Form, PRIORITIES, STATUSES},
+    state::{Field, Form, PRIORITIES, REPEATS, STATUSES},
     theme::{ACCENT, ACCENT_BIS, BACKGROUND, HIGHLIGHT, PRIMARY, SECONDARY},
 };
 
@@ -34,13 +34,23 @@ pub(super) fn render(form: &Form, frame: &mut Frame, page: Rect) {
         .areas(inner);
     render_fields(form, frame, fields);
     match form.field {
-        Field::Title => {}
+        Field::Title | Field::Pin => {}
         Field::Priority => {
             let at = PRIORITIES.iter().position(|&p| p == form.priority);
             let names = PRIORITIES.iter().map(|&p| priority_name(p));
             dropdown(names, at, frame, side);
         }
         Field::Due => calendar(form.due.unwrap_or(form.today), form, frame, side),
+        Field::Repeat => {
+            let mut names: Vec<String> = REPEATS.iter().map(|&r| recur_name(r)).collect();
+            let mut at = REPEATS.iter().position(|&r| r == form.recur);
+            // An interval the dropdown doesn't offer, set elsewhere.
+            if at.is_none() {
+                names.push(recur_name(form.recur));
+                at = Some(names.len() - 1);
+            }
+            dropdown(names.into_iter(), at, frame, side);
+        }
         Field::Status => {
             let at = STATUSES.iter().position(|&s| s == form.status);
             let names = STATUSES.iter().map(|&s| status_name(s));
@@ -52,7 +62,17 @@ pub(super) fn render(form: &Form, frame: &mut Frame, page: Rect) {
 
 /// One rounded box per field, titled with its name, lit while focused.
 fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
-    let rows = Layout::vertical([Constraint::Length(3); 5]).split(rect);
+    let [title, priority, due, status, tags] =
+        Layout::vertical([Constraint::Length(3); 5]).areas(rect);
+    // Due and repeat share a row, so do status and pin.
+    let halves = |row: Rect| -> [Rect; 2] {
+        Layout::horizontal([Constraint::Fill(1); 2])
+            .spacing(1)
+            .areas(row)
+    };
+    let [due, repeat] = halves(due);
+    let [status, pin] = halves(status);
+    let rows = [title, priority, due, repeat, status, pin, tags];
     let due = form
         .due
         .map_or_else(|| "none".to_owned(), |due| due.to_string());
@@ -60,7 +80,9 @@ fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
         form.title.clone(),
         priority_name(form.priority),
         due,
+        recur_name(form.recur),
         status_name(form.status),
+        if form.pinned { "📌 yes" } else { "no" }.to_owned(),
         tag_names(&form.tags),
     ];
     for ((field, value), row) in Field::ALL.iter().zip(values).zip(rows.iter()) {
@@ -78,7 +100,7 @@ fn render_fields(form: &Form, frame: &mut Frame, rect: Rect) {
         let mut spans = vec![Span::styled(value, PRIMARY)];
         if focused && *field == Field::Title {
             spans.push(Span::styled("▏", ACCENT));
-        } else if *field != Field::Title {
+        } else if !matches!(*field, Field::Title | Field::Pin) {
             spans.push(Span::styled(" ▾", SECONDARY));
         }
         let width = block.inner(*row).width;
@@ -99,7 +121,9 @@ fn label(field: Field) -> &'static str {
         Field::Title => "title",
         Field::Priority => "priority",
         Field::Due => "due",
+        Field::Repeat => "repeat",
         Field::Status => "status",
+        Field::Pin => "pin",
         Field::Tags => "tags",
     }
 }
@@ -128,6 +152,24 @@ fn priority_name(priority: Priority) -> String {
     priority
         .emoji()
         .map_or_else(|| name.to_owned(), |emoji| format!("{emoji} {name}"))
+}
+
+/// `every 2 weeks`, `every day`, or `never`.
+fn recur_name(recur: Option<Recur>) -> String {
+    let Some(Recur { every, unit }) = recur else {
+        return "never".to_owned();
+    };
+    let unit = match unit {
+        Unit::Day => "day",
+        Unit::Week => "week",
+        Unit::Month => "month",
+        Unit::Year => "year",
+    };
+    if every <= 1 {
+        format!("🔁 every {unit}")
+    } else {
+        format!("🔁 every {every} {unit}s")
+    }
 }
 
 /// `[/] in progress`.

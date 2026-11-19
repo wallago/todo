@@ -19,7 +19,7 @@ mod picker;
 
 pub(super) use confirm::Confirm;
 pub(super) use dashboard::{Dashboard, DueTodo};
-pub(super) use form::{Field, Form, PRIORITIES, STATUSES};
+pub(super) use form::{Field, Form, PRIORITIES, REPEATS, STATUSES};
 pub(super) use manager::Manager;
 pub(super) use picker::Picker;
 

@@ -1,12 +1,10 @@
 //! Core todo model: plain data, no I/O.
 
-use chrono::NaiveDate;
+use chrono::{Days, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
-/// Stable identifier, written as an Obsidian block id (`^k3x9a2`).
-///
-/// Survives edits to the text, so the TUI, MCP and desk display can all
-/// point at the same task.
+/// Stable identifier: a UUID, or the Obsidian block id (`k3x9a2`) of a todo
+/// imported from a vault. Treat it as an opaque string.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(transparent)]
@@ -96,6 +94,67 @@ impl Priority {
     }
 }
 
+/// Unit of a [`Recur`] interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Unit {
+    /// Days.
+    Day,
+    /// Weeks.
+    Week,
+    /// Months; the 31st becomes the month's last day.
+    Month,
+    /// Years.
+    Year,
+}
+
+/// How often a todo comes back: every `every` `unit`s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Recur {
+    /// How many units between two occurrences, at least 1.
+    #[serde(default = "one")]
+    pub every: u32,
+    /// Day, week, month or year.
+    pub unit: Unit,
+}
+
+/// Default for [`Recur::every`].
+const fn one() -> u32 {
+    1
+}
+
+impl Recur {
+    /// The date one interval after `from`. Stays on `from` if it would
+    /// overflow, which no real date does.
+    #[must_use]
+    pub fn next(self, from: NaiveDate) -> NaiveDate {
+        let n = self.every.max(1);
+        let next = match self.unit {
+            Unit::Day => from.checked_add_days(Days::new(n.into())),
+            Unit::Week => from.checked_add_days(Days::new(u64::from(n) * 7)),
+            Unit::Month => from.checked_add_months(Months::new(n)),
+            Unit::Year => from.checked_add_months(Months::new(n.saturating_mul(12))),
+        };
+        next.unwrap_or(from)
+    }
+
+    /// The todo that comes after `done`, completed on `today`: same fields,
+    /// open, due one interval after its due date (or after `today`).
+    /// Its id is empty, for the store to fill.
+    #[must_use]
+    pub fn follow_up(self, done: &Todo, today: NaiveDate) -> Todo {
+        let mut next = Todo::new(Id(String::new()), done.text.clone(), today);
+        next.priority = done.priority;
+        next.tags.clone_from(&done.tags);
+        next.pinned = done.pinned;
+        next.recur = Some(self);
+        next.due = Some(self.next(done.due.unwrap_or(today)));
+        next
+    }
+}
+
 /// One task.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -122,6 +181,12 @@ pub struct Todo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Being worked on, usually with no due date: shown first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    /// Comes back when completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recur: Option<Recur>,
 }
 
 impl Todo {
@@ -137,6 +202,8 @@ impl Todo {
             created: Some(today),
             done: None,
             tags: Vec::new(),
+            pinned: false,
+            recur: None,
         }
     }
 
@@ -246,6 +313,52 @@ mod tests {
         assert!(!todo.is_overdue(date(2026, 10, 20)));
         todo.complete(date(2026, 10, 24));
         assert!(!todo.is_overdue(date(2026, 10, 24)));
+    }
+
+    #[test]
+    fn recur_moves_the_due_date() {
+        let every = |every, unit| Recur { every, unit };
+        assert_eq!(
+            every(2, Unit::Day).next(date(2026, 12, 31)),
+            date(2027, 1, 2)
+        );
+        assert_eq!(
+            every(1, Unit::Week).next(date(2026, 11, 19)),
+            date(2026, 11, 26)
+        );
+        assert_eq!(
+            every(1, Unit::Month).next(date(2026, 1, 31)),
+            date(2026, 2, 28)
+        );
+        assert_eq!(
+            every(1, Unit::Year).next(date(2028, 2, 29)),
+            date(2029, 2, 28)
+        );
+        assert_eq!(every(0, Unit::Day).next(date(2026, 1, 1)), date(2026, 1, 2));
+    }
+
+    #[test]
+    fn follow_up_copies_and_moves_on() {
+        let recur = Recur {
+            every: 1,
+            unit: Unit::Week,
+        };
+        let mut todo = Todo::new(Id("a".into()), "water plants", date(2026, 1, 1));
+        todo.tags = vec!["home".into()];
+        todo.pinned = true;
+        todo.due = Some(date(2026, 11, 10));
+        todo.complete(date(2026, 11, 19));
+        let next = recur.follow_up(&todo, date(2026, 11, 19));
+        assert_eq!(next.status, Status::Todo);
+        assert_eq!(next.due, Some(date(2026, 11, 17)));
+        assert_eq!(next.created, Some(date(2026, 11, 19)));
+        assert_eq!(
+            (&next.tags, next.pinned, next.recur),
+            (&todo.tags, true, Some(recur))
+        );
+        todo.due = None;
+        let next = recur.follow_up(&todo, date(2026, 11, 19));
+        assert_eq!(next.due, Some(date(2026, 11, 26)));
     }
 
     #[test]

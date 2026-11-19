@@ -1,8 +1,9 @@
-//! The add and edit form: title, priority, due date, status and tags.
+//! The add and edit form: title, priority, due date, repeat, status, pin
+//! and tags.
 
 use chrono::{Days, Months, NaiveDate};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
-use todo_client::{NewTodo, Priority, Status, Todo, TodoPatch};
+use todo_client::{NewTodo, Priority, Recur, Status, Todo, TodoPatch, Unit};
 
 use super::{Action, Outcome};
 use crate::config::Keys;
@@ -17,19 +18,25 @@ pub(in crate::tui) enum Field {
     Priority,
     /// A calendar.
     Due,
+    /// A dropdown of [`REPEATS`].
+    Repeat,
     /// A dropdown of [`STATUSES`].
     Status,
+    /// On or off.
+    Pin,
     /// Checkboxes of every known tag, filtered by what's typed.
     Tags,
 }
 
 impl Field {
     /// Every field, in tab order.
-    pub(in crate::tui) const ALL: [Self; 5] = [
+    pub(in crate::tui) const ALL: [Self; 7] = [
         Self::Title,
         Self::Priority,
         Self::Due,
+        Self::Repeat,
         Self::Status,
+        Self::Pin,
         Self::Tags,
     ];
 
@@ -50,6 +57,31 @@ pub(in crate::tui) const PRIORITIES: [Priority; 6] = [
     Priority::Normal,
     Priority::Low,
     Priority::Lowest,
+];
+
+/// Repeat dropdown: none, then common intervals.
+pub(in crate::tui) const REPEATS: [Option<Recur>; 6] = [
+    None,
+    Some(Recur {
+        every: 1,
+        unit: Unit::Day,
+    }),
+    Some(Recur {
+        every: 1,
+        unit: Unit::Week,
+    }),
+    Some(Recur {
+        every: 2,
+        unit: Unit::Week,
+    }),
+    Some(Recur {
+        every: 1,
+        unit: Unit::Month,
+    }),
+    Some(Recur {
+        every: 1,
+        unit: Unit::Year,
+    }),
 ];
 
 /// Dropdown order.
@@ -73,8 +105,12 @@ pub(in crate::tui) struct Form {
     pub(in crate::tui) priority: Priority,
     /// Due date, if any.
     pub(in crate::tui) due: Option<NaiveDate>,
+    /// Comes back when completed.
+    pub(in crate::tui) recur: Option<Recur>,
     /// Checkbox state.
     pub(in crate::tui) status: Status,
+    /// Pinned: being worked on, usually with no due date.
+    pub(in crate::tui) pinned: bool,
     /// Ticked tags, without the leading `#`, in the order they were ticked.
     pub(in crate::tui) tags: Vec<String>,
     /// Every tag used in the vault, sorted, plus any made here.
@@ -97,7 +133,9 @@ impl Form {
             title: String::new(),
             priority: Priority::Normal,
             due: None,
+            recur: None,
             status: Status::Todo,
+            pinned: false,
             tags: Vec::new(),
             known_tags,
             tag_input: String::new(),
@@ -113,7 +151,9 @@ impl Form {
             title: todo.text.clone(),
             priority: todo.priority,
             due: todo.due,
+            recur: todo.recur,
             status: todo.status,
+            pinned: todo.pinned,
             tags: todo.tags.clone(),
             ..Self::new(today, known_tags)
         }
@@ -204,9 +244,16 @@ impl Form {
             (Field::Priority, KeyCode::Up | KeyCode::Down) => {
                 self.priority = pick(&PRIORITIES, self.priority, arrow == KeyCode::Down);
             }
+            (Field::Repeat, KeyCode::Up | KeyCode::Down) => {
+                self.recur = pick(&REPEATS, self.recur, arrow == KeyCode::Down);
+            }
             (Field::Status, KeyCode::Up | KeyCode::Down) => {
                 self.status = pick(&STATUSES, self.status, arrow == KeyCode::Down);
             }
+            (
+                Field::Pin,
+                KeyCode::Char(' ') | KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right,
+            ) => self.pinned = !self.pinned,
             (Field::Tags, KeyCode::Char(' ')) => {
                 let tag = self.tag_matches().get(self.tag_cursor).map(|&t| t.clone());
                 if let Some(tag) = tag {
@@ -260,6 +307,8 @@ impl Form {
                 priority: self.priority,
                 due: self.due,
                 tags: self.tags,
+                pinned: self.pinned,
+                recur: self.recur,
                 ..NewTodo::default()
             };
             return Some(Action::Add(new, self.status));
@@ -271,6 +320,8 @@ impl Form {
             due: (self.due != old.due).then_some(self.due),
             status: (self.status != old.status).then_some(self.status),
             tags: (self.tags != old.tags).then_some(self.tags),
+            pinned: (self.pinned != old.pinned).then_some(self.pinned),
+            recur: (self.recur != old.recur).then_some(self.recur),
         };
         (patch != TodoPatch::default()).then_some(Action::Change(old.id, patch))
     }
@@ -338,7 +389,12 @@ mod tests {
         // Opens on today, then a week and a day later.
         type_text(&mut form, "eeo");
         press(&mut form, KeyCode::Tab);
+        // Repeat: none -> every day -> every week.
+        type_text(&mut form, "ee");
+        press(&mut form, KeyCode::Tab);
         type_text(&mut form, "e");
+        press(&mut form, KeyCode::Tab);
+        press(&mut form, KeyCode::Char(' '));
         press(&mut form, KeyCode::Tab);
         // Tick `work` by filtering, then make a new `garden` tag.
         type_text(&mut form, "wo ");
@@ -352,6 +408,11 @@ mod tests {
             priority: Priority::High,
             due: NaiveDate::from_ymd_opt(2026, 11, 7),
             tags: vec!["work".into(), "garden".into()],
+            pinned: true,
+            recur: Some(Recur {
+                every: 1,
+                unit: Unit::Week,
+            }),
             ..NewTodo::default()
         };
         assert_eq!(form.action(), Some(Action::Add(new, Status::InProgress)));
@@ -401,13 +462,15 @@ mod tests {
         press(&mut form, KeyCode::BackTab);
         assert_eq!(form.field, Field::Tags);
         press(&mut form, KeyCode::BackTab);
+        press(&mut form, KeyCode::BackTab);
         assert_eq!(form.field, Field::Status);
         for _ in 0..9 {
             press(&mut form, KeyCode::Down);
         }
         assert_eq!(form.status, Status::Cancelled);
-        press(&mut form, KeyCode::Tab);
-        press(&mut form, KeyCode::Tab);
+        for _ in 0..3 {
+            press(&mut form, KeyCode::Tab);
+        }
         assert_eq!(form.field, Field::Title);
     }
 

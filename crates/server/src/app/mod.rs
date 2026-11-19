@@ -7,20 +7,17 @@ use todo_store::Store;
 
 use crate::prelude::*;
 
-/// Reloads the vault when it changes on disk.
-mod watch;
-
 /// State shared by every route.
 #[derive(Clone, Debug)]
 pub(crate) struct AppState {
-    /// The vault. The lock makes requests touch it one at a time.
+    /// The database. The lock makes requests touch it one at a time.
     store: Arc<Mutex<Store>>,
 }
 
 impl AppState {
-    /// Loads the vault.
-    pub(crate) fn open(root: &Path, inbox: &Path) -> Result<Self> {
-        Ok(Self::new(Store::open(root, inbox)?))
+    /// Opens the database.
+    pub(crate) fn open(path: &Path, inbox: &str) -> Result<Self> {
+        Ok(Self::new(Store::open(path, inbox)?))
     }
 
     /// Wraps an already open store.
@@ -32,7 +29,7 @@ impl AppState {
 
     /// Locks the store.
     pub(crate) fn store(&self) -> MutexGuard<'_, Store> {
-        // Store changes are all-or-nothing, so a panic can't leave it half-changed.
+        // Store changes are transactions, so a panic can't leave one half done.
         self.store.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

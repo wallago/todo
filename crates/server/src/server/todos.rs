@@ -22,14 +22,17 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 /// `GET /api/todos`: every todo, or only those of `?note=`.
-async fn list(State(state): State<AppState>, Query(query): Query<TodoQuery>) -> Json<Vec<Todo>> {
-    let todos = state.list_todos(query.note.as_deref());
-    Json(todos.into_iter().map(|(_, todo)| todo).collect())
+async fn list(
+    State(state): State<AppState>,
+    Query(query): Query<TodoQuery>,
+) -> Result<Json<Vec<Todo>>, ApiError> {
+    let todos = state.list_todos(query.note.as_deref())?;
+    Ok(Json(todos.into_iter().map(|(_, todo)| todo).collect()))
 }
 
-/// `GET /api/notes`: every note's path, relative to the vault.
-async fn notes(State(state): State<AppState>) -> Json<Vec<String>> {
-    Json(state.list_notes())
+/// `GET /api/notes`: every note's name, like `projects/dev.md`.
+async fn notes(State(state): State<AppState>) -> Result<Json<Vec<String>>, ApiError> {
+    Ok(Json(state.list_notes()?))
 }
 
 /// `GET /api/todos/{id}`: one todo, or 404.
@@ -37,7 +40,7 @@ async fn one(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Todo>, ApiError> {
-    let todo = state.store().get(&Id(id.clone())).cloned();
+    let todo = state.store().get(&Id(id.clone()))?;
     todo.map(Json).ok_or_else(|| ApiError::not_found(&id))
 }
 
@@ -58,7 +61,8 @@ async fn update(
     Ok(Json(state.update_todo(&Id(id), patch)?))
 }
 
-/// `POST /api/todos/{id}/complete`: ticks it. Safe to retry.
+/// `POST /api/todos/{id}/complete`: ticks it. Safe to retry. A recurring
+/// todo also gets its next one added.
 async fn complete(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -66,7 +70,7 @@ async fn complete(
     Ok(Json(state.complete_todo(&Id(id))?))
 }
 
-/// `DELETE /api/todos/{id}`: removes it and its line. Answers 204.
+/// `DELETE /api/todos/{id}`: removes it. Answers 204.
 async fn remove(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -77,21 +81,14 @@ async fn remove(
 
 /// What the routes and the MCP tools both do.
 impl AppState {
-    /// Every todo with its note's path, or only those of `note`.
-    pub(super) fn list_todos(&self, note: Option<&str>) -> Vec<(String, Todo)> {
-        self.store()
-            .todos_by_note()
-            .filter(|(path, _)| note.is_none_or(|note| *path == std::path::Path::new(note)))
-            .map(|(path, todo)| (path.to_string_lossy().into_owned(), todo.clone()))
-            .collect()
+    /// Every todo with its note's name, or only those of `note`.
+    pub(super) fn list_todos(&self, note: Option<&str>) -> Result<Vec<(String, Todo)>, ApiError> {
+        Ok(self.store().todos_by_note(note)?)
     }
 
-    /// Every note's path, relative to the vault.
-    pub(super) fn list_notes(&self) -> Vec<String> {
-        self.store()
-            .notes()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect()
+    /// Every note's name.
+    pub(super) fn list_notes(&self) -> Result<Vec<String>, ApiError> {
+        Ok(self.store().notes()?)
     }
 
     /// Adds a todo to the inbox note, or to `new.note`.
@@ -101,9 +98,11 @@ impl AppState {
         todo.priority = new.priority;
         todo.due = new.due;
         todo.tags = new.tags;
+        todo.pinned = new.pinned;
+        todo.recur = new.recur;
         let mut store = self.store();
         Ok(match new.note {
-            Some(note) => store.add_to(note, todo)?,
+            Some(note) => store.add_to(&note, todo)?,
             None => store.add(todo)?,
         })
     }
@@ -121,7 +120,7 @@ impl AppState {
         Ok(self.store().update(id, |todo| todo.complete(today))?)
     }
 
-    /// Removes a todo and its line.
+    /// Removes a todo.
     pub(super) fn remove_todo(&self, id: &Id) -> Result<(), ApiError> {
         self.store().remove(id)?;
         Ok(())
@@ -133,7 +132,7 @@ pub(super) fn today() -> NaiveDate {
     chrono::Local::now().date_naive()
 }
 
-/// Refuses text or tags that would break the task's line in the note.
+/// Refuses empty or multi-line text, and tags with spaces or a `#`.
 fn check(text: Option<&str>, tags: Option<&[String]>) -> Result<(), ApiError> {
     if let Some(text) = text {
         if text.trim().is_empty() {
@@ -167,6 +166,12 @@ fn apply(patch: TodoPatch, todo: &mut Todo, today: NaiveDate) {
     }
     if let Some(tags) = patch.tags {
         todo.tags = tags;
+    }
+    if let Some(pinned) = patch.pinned {
+        todo.pinned = pinned;
+    }
+    if let Some(recur) = patch.recur {
+        todo.recur = recur;
     }
     match patch.status {
         Some(Status::Done) => todo.complete(today),
@@ -219,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_returns_every_todo() {
-        let (_dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         let (status, body) = send(&app, Method::GET, "/api/todos", None).await;
         assert_eq!(status, StatusCode::OK);
         let todos: Vec<Todo> = serde_json::from_value(body).expect("todos");
@@ -229,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_returns_the_todo_or_404() {
-        let (_dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         let (status, body) = send(&app, Method::GET, "/api/todos/bbbbbb", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["text"], "b");
@@ -241,32 +246,25 @@ mod tests {
 
     #[tokio::test]
     async fn add_writes_to_the_inbox() {
-        let (dir, app) = test_app(NOTE);
+        let (state, app) = test_app(NOTE);
         let new = json!({"text": " buy milk ", "priority": "high", "tags": ["errand"]});
         let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
         let todo: Todo = serde_json::from_value(body).expect("todo");
         assert_eq!(todo.text, "buy milk");
-        let note = std::fs::read_to_string(dir.path().join("todo.md")).expect("note");
-        let line = format!("- [ ] buy milk ⏫ ➕ {} #errand ^{}", today(), todo.id.0);
-        assert!(note.contains(&line), "{note}");
+        assert_eq!(todo.priority, todo_client::Priority::High);
+        assert_eq!(todo.created, Some(today()));
+        assert_eq!(todo.tags, ["errand"]);
+        let saved = state.list_todos(Some("todo.md")).expect("todos");
+        assert_eq!(saved.last().map(|(_, t)| t), Some(&todo));
     }
 
     #[tokio::test]
     async fn add_can_target_another_note() {
-        let (dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         let new = json!({"text": "ship it", "note": "projects/dev.md"});
-        let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
-        let note = std::fs::read_to_string(dir.path().join("projects/dev.md")).expect("note");
-        assert_eq!(
-            note,
-            format!(
-                "- [ ] ship it ➕ {} ^{}\n",
-                today(),
-                body["id"].as_str().unwrap_or_default()
-            )
-        );
 
         let (_, body) = send(&app, Method::GET, "/api/notes", None).await;
         assert_eq!(body, json!(["projects/dev.md", "todo.md"]));
@@ -288,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_refuses_text_that_breaks_the_line() {
-        let (_dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         for new in [
             json!({"text": "  "}),
             json!({"text": "two\nlines"}),
@@ -301,16 +299,16 @@ mod tests {
 
     #[tokio::test]
     async fn patch_changes_only_what_is_sent() {
-        let (dir, app) = test_app(NOTE);
+        let (state, app) = test_app(NOTE);
         let patch = json!({"text": "a, renamed", "due": null});
         let (status, body) = send(&app, Method::PATCH, "/api/todos/aaaaaa", Some(patch)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["text"], "a, renamed");
         assert_eq!(body.get("due"), None);
-        let note = std::fs::read_to_string(dir.path().join("todo.md")).expect("note");
+        let saved = state.store().get(&Id("aaaaaa".into())).expect("get");
         assert_eq!(
-            note,
-            "# Todo\n- [ ] a, renamed ^aaaaaa\n- [x] b ✅ 2026-10-20 ^bbbbbb\n"
+            saved.map(|t| (t.text, t.due)),
+            Some(("a, renamed".into(), None))
         );
 
         // Reopening clears the done date.
@@ -326,8 +324,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pin_and_recur_over_the_api() {
+        let (_state, app) = test_app(NOTE);
+        let new = json!({"text": "gym", "pinned": true, "recur": {"every": 2, "unit": "day"}});
+        let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["pinned"], true);
+        assert_eq!(body["recur"], json!({"every": 2, "unit": "day"}));
+        let id = body["id"].as_str().unwrap_or_default().to_owned();
+
+        let (_, done) = send(
+            &app,
+            Method::POST,
+            &format!("/api/todos/{id}/complete"),
+            None,
+        )
+        .await;
+        assert_eq!(done["status"], "done");
+        let (_, todos) = send(&app, Method::GET, "/api/todos", None).await;
+        let gyms: Vec<&Value> = todos
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| t["text"] == "gym")
+            .collect();
+        assert_eq!(gyms.len(), 2, "{todos}");
+        let next = gyms[1];
+        assert_eq!(next["status"], "todo");
+        assert_eq!(
+            next["due"],
+            json!((today() + chrono::Days::new(2)).to_string())
+        );
+
+        let patch = json!({"pinned": false, "recur": null});
+        let uri = format!("/api/todos/{}", next["id"].as_str().unwrap_or_default());
+        let (_, body) = send(&app, Method::PATCH, &uri, Some(patch)).await;
+        assert_eq!((body.get("pinned"), body.get("recur")), (None, None));
+    }
+
+    #[tokio::test]
     async fn complete_is_safe_to_retry() {
-        let (_dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         let (status, first) = send(&app, Method::POST, "/api/todos/aaaaaa/complete", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(first["status"], "done");
@@ -337,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_removes_the_todo() {
-        let (_dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         let (status, _) = send(&app, Method::DELETE, "/api/todos/aaaaaa", None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = send(&app, Method::GET, "/api/todos/aaaaaa", None).await;
@@ -348,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_round_trip() -> todo_client::Result<()> {
-        let (_dir, app) = test_app(NOTE);
+        let (_state, app) = test_app(NOTE);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
