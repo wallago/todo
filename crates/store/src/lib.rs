@@ -103,7 +103,7 @@ END;
 "];
 /// Columns read into a [`Todo`] by [`read_todo`]; column 8 is its note's name.
 const TODO_COLUMNS: &str = "t.id, t.text, t.status, t.priority, t.due, t.done, t.tags, \
-     t.created_at, n.name, t.pinned, t.recur";
+    t.created_at, n.name, t.pinned, t.recur";
 
 /// The todo database.
 #[derive(Debug)]
@@ -158,8 +158,8 @@ impl Store {
     pub fn todos_by_note(&self, note: Option<&str>) -> Result<Vec<(String, Todo)>> {
         let sql = format!(
             "SELECT {TODO_COLUMNS} FROM todos t JOIN notes n ON n.id = t.note_id
-             WHERE t.deleted_at IS NULL AND (?1 IS NULL OR n.name = ?1)
-             ORDER BY n.name, t.rowid"
+            WHERE t.deleted_at IS NULL AND (?1 IS NULL OR n.name = ?1)
+            ORDER BY n.name, t.rowid"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         // A bad name matches nothing.
@@ -231,7 +231,8 @@ impl Store {
         change(&mut todo);
         todo.id = id.clone();
         let completed = before.status != Status::Done && todo.status == Status::Done;
-        if let (true, Some(recur)) = (completed, todo.recur.take()) {
+        // Only taken on completion: any other edit keeps the recurrence.
+        if let Some(recur) = todo.recur.take_if(|_| completed) {
             let today = todo.done.unwrap_or_else(|| Local::now().date_naive());
             let mut next = recur.follow_up(&todo, today);
             next.id = Id(Uuid::now_v7().to_string());
@@ -244,7 +245,7 @@ impl Store {
         if todo != before {
             tx.execute(
                 "UPDATE todos SET text = ?2, status = ?3, priority = ?4, due = ?5,
-                 done = ?6, tags = ?7, pinned = ?8, recur = ?9, updated_at = ?10 WHERE id = ?1",
+                done = ?6, tags = ?7, pinned = ?8, recur = ?9, updated_at = ?10 WHERE id = ?1",
                 params![
                     todo.id.0,
                     todo.text,
@@ -305,8 +306,8 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?;
         let sql = format!(
             "SELECT {TODO_COLUMNS}, t.deleted_at IS NOT NULL FROM todos t
-             JOIN notes n ON n.id = t.note_id
-             WHERE t.version > ?1 ORDER BY t.version"
+            JOIN notes n ON n.id = t.note_id
+            WHERE t.version > ?1 ORDER BY t.version"
         );
         let todos = tx
             .prepare_cached(&sql)?
@@ -399,11 +400,11 @@ pub struct Imported {
 
 /// Runs the migrations this database hasn't run yet.
 fn migrate(conn: &mut Connection) -> Result<()> {
-    let done: usize = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let done: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let tx = conn.transaction()?;
-    for (n, sql) in MIGRATIONS.iter().enumerate().skip(done) {
+    for (n, sql) in (1_i64..).zip(MIGRATIONS).skip_while(|&(n, _)| n <= done) {
         tx.execute_batch(sql)?;
-        tx.pragma_update(None, "user_version", n + 1)?;
+        tx.pragma_update(None, "user_version", n)?;
     }
     tx.commit()?;
     Ok(())
@@ -413,7 +414,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
 fn get(conn: &Connection, id: &Id) -> Result<Option<Todo>> {
     let sql = format!(
         "SELECT {TODO_COLUMNS} FROM todos t JOIN notes n ON n.id = t.note_id
-         WHERE t.id = ?1 AND t.deleted_at IS NULL"
+        WHERE t.id = ?1 AND t.deleted_at IS NULL"
     );
     Ok(conn
         .prepare_cached(&sql)?
@@ -463,7 +464,7 @@ fn insert(tx: &Transaction<'_>, note_id: &str, todo: &Todo, now: &str) -> Result
     tx.execute(
         "INSERT INTO todos (id, note_id, text, status, priority, due, done, tags, pinned, recur,
                             created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             todo.id.0,
             note_id,
@@ -744,6 +745,22 @@ mod tests {
     }
 
     #[test]
+    fn editing_a_recurring_todo_keeps_it_recurring() -> Result<()> {
+        let mut store = store();
+        let todo = store.add_to("gym", Todo::new(id("g1"), "gym", today()))?;
+        let weekly = Some(Recur {
+            every: 1,
+            unit: Unit::Week,
+        });
+        let saved = store.update(&todo.id, |t| t.recur = weekly)?;
+        assert_eq!(saved.recur, weekly);
+        let renamed = store.update(&todo.id, |t| "swim".clone_into(&mut t.text))?;
+        assert_eq!(renamed.recur, weekly);
+        assert_eq!(store.get(&todo.id)?.and_then(|t| t.recur), weekly);
+        Ok(())
+    }
+
+    #[test]
     fn completing_a_recurring_todo_adds_the_next_one_once() -> Result<()> {
         let mut store = store();
         let mut todo = Todo::new(id("a"), "water plants", today());
@@ -775,7 +792,7 @@ mod tests {
         store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         assert_eq!(store.remove(&id("a"))?.text, "a");
         assert_eq!(store.get(&id("a"))?, None);
-        assert!(store.todos_by_note(None)?.is_empty());
+        assert_eq!(store.todos_by_note(None)?, Vec::new());
         assert!(matches!(store.remove(&id("a")), Err(Error::NotFound(_))));
         let rows: i64 = store.conn.query_row(
             "SELECT count(*) FROM todos WHERE deleted_at IS NOT NULL",

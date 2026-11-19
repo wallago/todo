@@ -4,14 +4,16 @@
 
 ```
 todo/
-├── Cargo.toml            # [workspace] members = ["crates/*"]
-├── crates/
+├── Cargo.toml            # [workspace] members = apps/server, apps/tui, crates/*
+├── justfile              # `just ci`: repo-wide checks, then each app's own
+├── apps/                 # one folder per app, each with its own justfile
+│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the database
+│   └── tui/              # ratatui client, works offline
+├── crates/               # libraries the apps share (`just crates` checks them)
 │   ├── core/             # Todo struct, state machine, no I/O
 │   ├── md/               # read-only Obsidian Tasks parser, for `todo-server import`
 │   ├── store/            # SQLite database: notes, todos, vault import
-│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the database
-│   ├── client/           # wire types + request fns (shared by tui/desk)
-│   └── tui/              # ratatui client
+│   └── client/           # wire types + request fns (shared by tui/desk)
 └── vault/                # sample Obsidian note, md parser test fixture
 ```
 
@@ -30,6 +32,13 @@ todo.db (SQLite)  <-->  server  <--HTTP-->  tui
   `store` is server-internal; the MCP tools live in the server and call the same code as the routes.
 - `client` holds the wire format once.
   The server and `tui` both depend on it, so the API types can't drift between consumers.
+
+### Checks
+
+`just ci` is the gate, and CI runs each of its recipes as a job in the flake's CI shell
+(`nix develop .#ci`): Nix lint, unused deps, `cargo deny`, `cargo audit`, editorconfig,
+typos, Markdown links, workflow lint, then format, TOML format, clippy `-D warnings`,
+tests and docs for `crates/` and each app. Commits are checked as Conventional Commits.
 
 ### Database
 
