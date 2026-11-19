@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { DuePage, NotePage, NotesPage } from "./components/Pages";
+import { DuePage, NotePage, NotesPage, PinnedPage } from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
 import type { Entry } from "./replica";
-import { useRoute } from "./route";
+import { TABS, tabOf, useRoute } from "./route";
 import { type Store, useStore } from "./store";
+import { useSwipe } from "./swipe";
 
 /** How often the app syncs on its own while it's on screen. */
 const AUTO_SYNC_MS = 30_000;
@@ -41,6 +42,14 @@ export function App({ store }: { store: Store }) {
   const [editing, setEditing] = useState<Entry | null | undefined>(undefined);
   const [settings, setSettings] = useState(!token);
   useAutoSync(store);
+  const tab = tabOf(route);
+  useSwipe(
+    (step) => {
+      const next = TABS[tab + step];
+      if (next) window.location.hash = next.href;
+    },
+    editing === undefined && !settings,
+  );
 
   const list = {
     todos: replica.todos,
@@ -69,18 +78,16 @@ export function App({ store }: { store: Store }) {
     setEditing(undefined);
   };
   const status = statusText(problem, replica.outbox.length, refused);
-  const onNotes = route.page !== "due";
 
   return (
     <>
       <header>
         <nav>
-          <a href="#/" className={onNotes ? "" : "active"}>
-            Due
-          </a>
-          <a href="#/notes" className={onNotes ? "active" : ""}>
-            Notes
-          </a>
+          {TABS.map(({ href, label }, i) => (
+            <a key={href} href={href} className={i === tab ? "active" : ""}>
+              {label}
+            </a>
+          ))}
         </nav>
         <output className={refused || problem === "token refused" ? "status error" : "status"}>
           {status}
@@ -108,6 +115,8 @@ export function App({ store }: { store: Store }) {
       <main>
         {route.page === "note" ? (
           <NotePage note={route.note} {...list} />
+        ) : route.page === "pinned" ? (
+          <PinnedPage {...list} />
         ) : route.page === "notes" ? (
           <NotesPage notes={replica.notes} todos={replica.todos} />
         ) : (
