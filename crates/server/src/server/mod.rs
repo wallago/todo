@@ -18,8 +18,6 @@ mod auth;
 mod mcp;
 /// OAuth login for claude.ai connectors.
 mod oauth;
-/// `/app`: the offline web app.
-mod pwa;
 /// `/api/todos`.
 mod todos;
 
@@ -36,9 +34,7 @@ fn routes(state: AppState, mcp_config: &McpConfig, tokens: Option<auth::Tokens>)
         .merge(todos::routes())
         .nest_service("/mcp", mcp::service(state.clone(), mcp_config));
     let readable = agenda::routes();
-    let mut router = Router::new()
-        .route("/health", get(health))
-        .merge(pwa::routes());
+    let mut router = Router::new().route("/health", get(health));
     if let Some(issuer) = tokens.as_ref().and_then(|tokens| tokens.oauth.clone()) {
         router = router.merge(oauth::routes(issuer));
     }

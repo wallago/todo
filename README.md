@@ -62,20 +62,6 @@ pulls `/api/sync` after each change, every 30 s and on `r`. The title bar shows 
 until it gets through. A change the server refuses (a todo deleted elsewhere, say) is dropped, shown as
 `refused: ...`, and undone by a full resync. Ticking a recurring todo offline: its next one appears once synced.
 
-### Web app (phone, offline)
-
-todo-server serves a small installable web app at `/app` (`/` leads there). Plain HTML and JS
-built into the binary, no build step (`crates/server/pwa/`).
-
-- Open `https://<server>/app` on the phone, paste the token (the `token_file` value) once,
-  then "Add to home screen". It needs https (or localhost) for offline mode.
-- Same model as the TUI: a copy of every todo plus a queue of changes in the browser's storage,
-  sent then synced with `/api/sync` after each change, every 30 s, on ⟳ and when it comes back online.
-  The bar shows `offline · 3 to send` or `refused: ...`.
-- Pages: Due (late, today, this week, pinned), Notes, one note. Tap a todo to edit or delete it.
-- ⚙ changes the token or forgets the local copy.
-- The app files are public (they hold no data); `/api` still needs the token.
-
 ### Import from Obsidian
 
 Once, to move an old vault in (never writes to the vault; safe to run again, known ids are skipped):
