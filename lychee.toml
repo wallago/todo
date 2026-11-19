@@ -1,0 +1,11 @@
+# configuration for https://github.com/lycheeverse/lychee
+
+# The repo's own GitHub pages 404 until the first push.
+exclude = ["^https://github\\.com/wallago/todo"]
+# Build output and the direnv cache hold Markdown that isn't ours.
+exclude_path = [
+  "target",
+  ".direnv",
+  # Sample Obsidian note: test data
+  "vault",
+]

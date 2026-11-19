@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(just --list*)",
+      "Bash(just ci*)",
+      "Bash(nix flake check*)",
+      "Bash(nix eval*)",
+      "Bash(nix build --dry-run*)",
+      "Bash(nix search nixpkgs*)",
+      "Bash(statix check*)",
+      "Bash(deadnix*)",
+      "Bash(just check*)",
+      "Bash(just test*)",
+      "Bash(just lint*)",
+      "Bash(just fmt*)",
+      "Bash(cargo check*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo test*)",
+      "Bash(cargo tree*)",
+      "Bash(cargo doc*)",
+      "Bash(taplo*)",
+      "Bash(cargo machete*)",
+      "Bash(cargo deny check*)",
+      "Bash(cargo audit*)",
+      "Bash(just build*)",
+      "Bash(editorconfig-checker*)",
+      "Bash(typos*)",
+      "Bash(lychee*)",
+      "Bash(committed*)",
+      "Bash(git cliff*)",
+      "Bash(actionlint*)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(just crates*)"
+    ],
+    "deny": [
+      "Bash(git push*)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}

@@ -20,7 +20,7 @@ in
     };
 
     settings = lib.mkOption {
-      type = settingsFormat.type;
+      inherit (settingsFormat) type;
       default = { };
       description = "Written to config.toml. token_file must be absolute.";
       example = {

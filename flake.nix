@@ -62,14 +62,27 @@
             claude = inputs.claude-code.packages.${system}.default;
 
             # ── Tooling shared ────────────────────────────────────────
-            ciTools = [
+            ciTools = with pkgs; [
+              just
+              statix
+              deadnix
               rust
+              taplo
+              cargo-machete
+              cargo-deny
+              cargo-audit
+              editorconfig-checker
+              typos
+              lychee
+              committed
+              actionlint
             ];
             devTools = with pkgs; [
               rust-analyzer
               claude
               # npx, for `just mcp-inspect`
               nodejs
+              git-cliff
             ];
           in
           {

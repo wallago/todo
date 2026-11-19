@@ -60,7 +60,7 @@ in
         default = "todo";
       };
       settings = lib.mkOption {
-        type = settingsFormat.type;
+        inherit (settingsFormat) type;
         example = {
           server.port = 3000;
           # Public HTTPS URL: turns on OAuth for claude.ai connectors (needs tokenFile).
