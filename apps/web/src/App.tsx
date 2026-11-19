@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { dueCount, showBadge } from "./badge";
 import { DuePage, NotePage, NotesPage, PinnedPage } from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
@@ -6,6 +7,7 @@ import type { Entry } from "./replica";
 import { TABS, tabOf, useRoute } from "./route";
 import { type Store, useStore } from "./store";
 import { useSwipe } from "./swipe";
+import { isoDate } from "./todo";
 
 /** How often the app syncs on its own while it's on screen. */
 const AUTO_SYNC_MS = 30_000;
@@ -42,6 +44,8 @@ export function App({ store }: { store: Store }) {
   const [editing, setEditing] = useState<Entry | null | undefined>(undefined);
   const [settings, setSettings] = useState(!token);
   useAutoSync(store);
+  // Every sync and local change makes a new copy, so the icon follows both.
+  useEffect(() => void showBadge(dueCount(replica.todos, isoDate())), [replica]);
   const tab = tabOf(route);
   useSwipe(
     (step) => {

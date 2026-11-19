@@ -26,7 +26,7 @@ The libraries the apps share live in `crates/` (core, md, store, client);
 - `crates/client`: request/response types and the HTTP client, shared by the server and the TUI.
 - `apps/server/src/server/`: axum routes (`todos.rs`, `agenda.rs`), auth, OAuth, and MCP at `/mcp` (`mcp.rs`).
 - `apps/tui/src/tui/`: the TUI; `replica.rs` is the offline copy and its queue of changes.
-- `apps/web/src/`: the web app; `replica.ts` and `sync.ts` mirror the TUI's offline copy and sync, `store.ts` keeps them in `localStorage`; `sw.ts` is the service worker.
+- `apps/web/src/`: the web app; `replica.ts` and `sync.ts` mirror the TUI's offline copy and sync, `store.ts` keeps them in `localStorage`; `sw.ts` is the service worker; `badge.ts` puts the count of todos due today or late on the installed app's icon.
 - `nix/web.nix`: builds the web app. Its `pnpmDeps` hash changes with `apps/web/pnpm-lock.yaml`: after a dependency change, set `hash = lib.fakeHash`, build `.#web`, and paste the hash it reports.
 - `.github/workflows/ci.yml`: one job per `just ci` recipe, each run in the flake's CI shell, plus the Nix flake check and the commit-format check.
 
