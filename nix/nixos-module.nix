@@ -67,7 +67,7 @@ in
           server.publicUrl = "https://todo.wallago.xyz";
           database = {
             path = "/var/lib/todo/todo.db";
-            inbox = "misc.md";
+            inbox = "misc";
           };
           # Host names MCP clients use for /mcp.
           mcp.allowedHosts = [

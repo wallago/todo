@@ -16,7 +16,7 @@
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-pub use todo_core::{Id, Priority, Recur, Status, Todo, Unit};
+pub use todo_core::{Changes, Id, NoteChange, Priority, Recur, Status, Todo, TodoChange, Unit};
 
 /// Request functions.
 #[cfg(feature = "http")]
@@ -30,6 +30,11 @@ pub use http::{Client, Error, Result};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(transform = todo_core::nullable_any_of))]
 pub struct NewTodo {
+    /// Id chosen by the client, a UUID, so an offline client can send the
+    /// same add twice safely: the second answers the todo already saved.
+    /// The server makes one if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
     /// What to do.
     pub text: String,
     /// Priority, normal if left out.
@@ -41,7 +46,7 @@ pub struct NewTodo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Note to add it to, like `projects/dev.md`.
+    /// Note to add it to, like `projects/dev`.
     /// Created if missing. The inbox note if left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -56,9 +61,17 @@ pub struct NewTodo {
 /// Query of `GET /api/todos`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoQuery {
-    /// Only todos in this note, like `travel/japan.md`.
+    /// Only todos in this note, like `travel/japan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Query of `GET /api/sync`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncQuery {
+    /// The `cursor` of the last sync; 0 (or left out) for everything.
+    #[serde(default)]
+    pub since: u64,
 }
 
 /// Body of `PATCH /api/todos/{id}`. Fields left out stay as they are.

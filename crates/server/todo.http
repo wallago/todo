@@ -10,7 +10,7 @@ Accept: application/json
 
 ### Todos of one note
 # @name list_note
-GET {{host}}/api/todos?note=projects/dev.md
+GET {{host}}/api/todos?note=projects/dev
 Authorization: Bearer {{token}}
 Accept: application/json
 
@@ -29,6 +29,12 @@ Accept: application/json
 ### Same, with the read-only token in the URL
 # @name agenda_read_token
 GET {{host}}/api/agenda?token={{read_token}}
+
+### Everything changed since a sync cursor (0: everything)
+# @name sync
+GET {{host}}/api/sync?since=0
+Authorization: Bearer {{token}}
+Accept: application/json
 
 ### One todo by id (404 if unknown)
 # @name one
@@ -57,7 +63,7 @@ Content-Type: application/json
 
 {
   "text": "Plan the enclosure",
-  "note": "projects/dongle.md"
+  "note": "projects/dongle"
 }
 
 ### Add a pinned, weekly todo with no due date

@@ -115,7 +115,7 @@ pub(super) enum Action {
 /// Done and total todos of one note.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NoteStats {
-    /// Note path, like `projects/todo.md`.
+    /// Note path, like `projects/todo`.
     pub(super) note: String,
     /// Done or cancelled todos.
     pub(super) done: usize,
@@ -153,7 +153,7 @@ pub(super) struct State {
     pub(super) focus: Focus,
     /// Page shown and selected in the sidebar.
     pub(super) page: Page,
-    /// Note paths from the server, like `projects/todo.md`.
+    /// Note paths from the server, like `projects/todo`.
     pub(super) notes: Vec<String>,
     /// The dashboard page.
     pub(super) dashboard: Dashboard,
@@ -524,9 +524,9 @@ mod tests {
             ..State::default()
         };
         state.set_notes(vec![
-            "projects/todo/main.md".into(),
-            "travel/japan.md".into(),
-            "todo.md".into(),
+            "projects/todo/main".into(),
+            "travel/japan".into(),
+            "todo".into(),
         ]);
         state
     }
@@ -543,11 +543,11 @@ mod tests {
     #[test]
     fn opens_the_first_note_and_keeps_it_on_refresh() {
         let mut state = with_notes();
-        assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main.md"));
-        state.manager.open(Some("new.md".into()));
+        assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main"));
+        state.manager.open(Some("new".into()));
         // Not on the server yet, but still the open one.
-        state.set_notes(vec!["a.md".into()]);
-        assert_eq!(state.manager.note.as_deref(), Some("new.md"));
+        state.set_notes(vec!["a".into()]);
+        assert_eq!(state.manager.note.as_deref(), Some("new"));
     }
 
     /// A state on the manager page, with one todo selected.
@@ -625,7 +625,7 @@ mod tests {
         state.on_key(press(KeyCode::Char('/')));
         type_text(&mut state, "zz/new");
         assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::LoadTodos));
-        assert_eq!(state.manager.note.as_deref(), Some("zz/new.md"));
+        assert_eq!(state.manager.note.as_deref(), Some("zz/new"));
         assert!(state.form.as_ref().is_some_and(|form| !form.is_edit()));
     }
 
@@ -660,18 +660,18 @@ mod tests {
         todo.due = Some(chrono::NaiveDate::MIN);
         state
             .dashboard
-            .set(vec![("travel/japan.md".into(), vec![todo])]);
+            .set(vec![("travel/japan".into(), vec![todo])]);
         assert_eq!(
             state.on_key(press(KeyCode::Enter)),
             Some(Action::Jump(Id("t1".into())))
         );
         assert_eq!(state.page, Page::Manager);
-        assert_eq!(state.manager.note.as_deref(), Some("travel/japan.md"));
+        assert_eq!(state.manager.note.as_deref(), Some("travel/japan"));
         // The todos come, then the cursor lands on it.
         let id = state.start(&Action::Jump(Id("t1".into())), false);
         let other = Todo::new(Id("t0".into()), "flight", chrono::NaiveDate::MIN);
         let todo = Todo::new(Id("t1".into()), "visa", chrono::NaiveDate::MIN);
-        let todos = Loaded::Todos("travel/japan.md".into(), vec![other, todo]);
+        let todos = Loaded::Todos("travel/japan".into(), vec![other, todo]);
         state.finish(id, Ok(vec![todos, Loaded::Select(Id("t1".into()))]));
         assert_eq!(state.manager.list.selected(), Some(1));
     }
@@ -684,7 +684,7 @@ mod tests {
         assert!(state.is_loading(Page::Stats));
         assert!(!state.is_loading(Page::Manager));
         let row = NoteStats {
-            note: "todo.md".into(),
+            note: "todo".into(),
             done: 1,
             total: 2,
             next_due: None,
@@ -719,9 +719,9 @@ mod tests {
     fn todos_of_a_note_closed_meanwhile_are_dropped() {
         let mut state = with_notes();
         let id = state.start(&Action::LoadTodos, false);
-        state.manager.open(Some("travel/japan.md".into()));
+        state.manager.open(Some("travel/japan".into()));
         let todo = Todo::new(Id("a1".into()), "milk", chrono::NaiveDate::MIN);
-        let todos = Loaded::Todos("projects/todo/main.md".into(), vec![todo]);
+        let todos = Loaded::Todos("projects/todo/main".into(), vec![todo]);
         state.finish(id, Ok(vec![todos]));
         assert!(state.manager.todos.is_empty());
     }
@@ -736,11 +736,11 @@ mod tests {
         state.on_key(press(KeyCode::Backspace));
         assert_eq!(
             state.picker.as_ref().and_then(Picker::selected),
-            Some("travel/japan.md")
+            Some("travel/japan")
         );
         assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::LoadTodos));
         assert!(state.picker.is_none());
-        assert_eq!(state.manager.note.as_deref(), Some("travel/japan.md"));
+        assert_eq!(state.manager.note.as_deref(), Some("travel/japan"));
     }
 
     #[test]
@@ -750,7 +750,7 @@ mod tests {
         type_text(&mut state, "jap");
         assert_eq!(state.on_key(press(KeyCode::Esc)), None);
         assert!(state.picker.is_none());
-        assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main.md"));
+        assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main"));
     }
 
     #[test]

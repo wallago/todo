@@ -42,7 +42,7 @@ struct AgendaTodo {
     id: Id,
     /// What to do.
     text: String,
-    /// The note it's in, like `projects/dev.md`.
+    /// The note it's in, like `projects/dev`.
     note: String,
     /// Due date.
     due: NaiveDate,
@@ -175,7 +175,7 @@ mod tests {
             .filter_map(|todo| todo["id"].as_str())
             .collect();
         assert_eq!(ids, ["dddddd", "cccccc", "bbbbbb"]);
-        assert_eq!(body["todos"][0]["note"], "todo.md");
+        assert_eq!(body["todos"][0]["note"], "todo");
         assert_eq!(body["todos"][0]["overdue"], true);
         assert_eq!(body["todos"][1]["overdue"], false);
     }

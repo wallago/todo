@@ -32,6 +32,7 @@ sha2 = "0.10"
 todo-client = { path = "../client", default-features = false, features = ["schemars"] }
 todo-core = { path = "../core" }
 todo-store = { path = "../store" }
+uuid = "1"
 
 
 [dev-dependencies]

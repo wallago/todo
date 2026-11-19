@@ -16,7 +16,7 @@ impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             path: PathBuf::from("todo.db"),
-            inbox: "misc.md".to_owned(),
+            inbox: "misc".to_owned(),
         }
     }
 }
@@ -30,14 +30,14 @@ mod tests {
         let config = toml::from_str::<DatabaseConfig>(
             r#"
             path = "/var/lib/todo/todo.db"
-            inbox = "todo.md"
+            inbox = "todo"
             "#,
         )
         .expect("failed to deserialize string");
         assert_eq!(config.path, PathBuf::from("/var/lib/todo/todo.db"));
-        assert_eq!(config.inbox, "todo.md");
+        assert_eq!(config.inbox, "todo");
         let config = toml::from_str::<DatabaseConfig>("").expect("empty config is valid");
         assert_eq!(config.path, PathBuf::from("todo.db"));
-        assert_eq!(config.inbox, "misc.md");
+        assert_eq!(config.inbox, "misc");
     }
 }

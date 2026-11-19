@@ -35,15 +35,26 @@ todo.db (SQLite)  <-->  server  <--HTTP-->  tui
 
 One SQLite file (`[database] path`, created on first start), migrated with `PRAGMA user_version`.
 
-- `notes`: `id` (UUID), `name` (unique, like `projects/todo/main.md`), `created_at`, `updated_at`, `deleted_at`.
+- `notes`: `id` (UUID), `name` (unique, like `projects/todo/main`), `created_at`, `updated_at`, `deleted_at`.
 - `todos`: `id`, `note_id`, `text`, `status`, `priority`, `due`, `done`, `tags` (JSON list),
   `pinned`, `recur` (JSON, like `{"every": 2, "unit": "week"}`), `created_at`, `updated_at`, `deleted_at`.
 - Pinned: being worked on, usually with no due date; listed first in the TUI.
 - Recurring: completing one adds the next, due one interval after its due date (or after today).
   The done one stops recurring, so reopening it can't add a second copy.
-- New ids are UUIDv7; todos imported from Obsidian keep their `^abc123` block id.
+- New ids are UUIDv7 (or the client's own UUID); todos imported from Obsidian keep their `^abc123` block id.
+- Note names are `/`-separated paths without `.md`, like `projects/todo/main`; a trailing `.md` sent by a client is dropped.
 - Deleting only sets `deleted_at`, so offline clients can sync it later. Ids are never reused.
 - Timestamps are RFC 3339 UTC text, so they sort as text.
+
+### Sync (offline clients)
+
+- Every insert or change takes the next number of one counter (`sync_counter`, bumped by triggers) into the row's `version`.
+  No clocks involved, so a device with a wrong clock can't lose changes.
+- `GET /api/sync?since=N` answers every note and todo with `version > N`, deleted ones too (`"deleted": true`),
+  and the `cursor` to send next time. `since=0` is the full snapshot.
+- Offline writes replay the normal routes. `POST /api/todos` takes a client-made UUID `id`: sending it twice answers
+  the saved todo (200) instead of a copy. `DELETE` of a deleted todo answers 204. `complete` was already safe to retry.
+- Conflicts: the last write the server receives wins. Fine for one person.
 
 ### Import from Obsidian
 

@@ -6,7 +6,7 @@ use todo_client::{Id, Priority, Status, Todo};
 /// The note open on the manager page, and its todos.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Manager {
-    /// Open note, like `projects/todo.md`.
+    /// Open note, like `projects/todo`.
     pub(in crate::tui) note: Option<String>,
     /// Its todos.
     pub(in crate::tui) todos: Vec<Todo>,

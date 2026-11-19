@@ -6,12 +6,12 @@
 
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
-use todo_core::{Id, Recur, Status, Todo};
+use todo_core::{Changes, Id, NoteChange, Recur, Status, Todo, TodoChange};
 use uuid::Uuid;
 
 /// What can go wrong in the store.
@@ -35,7 +35,7 @@ pub enum Error {
     #[error("id `{}` is already used", .0.0)]
     DuplicateId(Id),
     /// The note name is not a relative `.md` path.
-    #[error("`{0}` is not a note name: give a relative path to a .md note, like `projects/dev.md`")]
+    #[error("`{0}` is not a note name: give a path like `projects/dev`")]
     BadNote(String),
 }
 
@@ -45,12 +45,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Schema changes, in order. `PRAGMA user_version` counts those applied.
 /// Only ever append: a deployed database already ran the old ones.
 const MIGRATIONS: &[&str] = &[r"
+-- Sync: every insert or change takes the next number of one counter (see
+-- the triggers), so a client asks for `version > cursor` without trusting
+-- any clock.
+CREATE TABLE sync_counter (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL
+);
+INSERT INTO sync_counter (id, version) VALUES (1, 0);
+
 CREATE TABLE notes (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    deleted_at TEXT
+    deleted_at TEXT,
+    version    INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE todos (
     id         TEXT PRIMARY KEY,
@@ -65,12 +75,32 @@ CREATE TABLE todos (
     recur      TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    deleted_at TEXT
+    deleted_at TEXT,
+    version    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX todos_note_id ON todos(note_id);
-CREATE INDEX todos_updated_at ON todos(updated_at);
-"];
+CREATE INDEX notes_version ON notes(version);
+CREATE INDEX todos_version ON todos(version);
 
+CREATE TRIGGER notes_version_insert AFTER INSERT ON notes BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE notes SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER notes_version_update AFTER UPDATE OF name, deleted_at ON notes BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE notes SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER todos_version_insert AFTER INSERT ON todos BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER todos_version_update AFTER UPDATE OF
+    note_id, text, status, priority, due, done, tags, pinned, recur, deleted_at ON todos
+BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+"];
 /// Columns read into a [`Todo`] by [`read_todo`]; column 8 is its note's name.
 const TODO_COLUMNS: &str = "t.id, t.text, t.status, t.priority, t.due, t.done, t.tags, \
      t.created_at, n.name, t.pinned, t.recur";
@@ -103,7 +133,7 @@ impl Store {
         let conn = Connection::open(path)?;
         // WAL lets `todo-server import` write while the server reads.
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        Self::setup(conn, inbox.into())
+        Self::setup(conn, &inbox.into())
     }
 
     /// A database in memory, for tests.
@@ -112,12 +142,12 @@ impl Store {
     ///
     /// As [`Store::open`].
     pub fn open_in_memory(inbox: impl Into<String>) -> Result<Self> {
-        Self::setup(Connection::open_in_memory()?, inbox.into())
+        Self::setup(Connection::open_in_memory()?, &inbox.into())
     }
 
     /// Settings and migrations shared by both `open`s.
-    fn setup(mut conn: Connection, inbox: String) -> Result<Self> {
-        check_note(&inbox)?;
+    fn setup(mut conn: Connection, inbox: &str) -> Result<Self> {
+        let inbox = note_name(inbox)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         migrate(&mut conn)?;
@@ -137,6 +167,8 @@ impl Store {
              ORDER BY n.name, t.rowid"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
+        // A bad name matches nothing.
+        let note = note.map(|note| note_name(note).unwrap_or_default());
         let rows = stmt.query_map([note], |row| Ok((row.get(8)?, read_todo(row)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -181,7 +213,7 @@ impl Store {
     /// [`Error::BadNote`] if `note` is not a note name,
     /// [`Error::DuplicateId`] if its id is taken, [`Error::Db`] on failure.
     pub fn add_to(&mut self, note: &str, mut todo: Todo) -> Result<Todo> {
-        check_note(note)?;
+        let note = note_name(note)?;
         if todo.id.0.is_empty() {
             todo.id = Id(Uuid::now_v7().to_string());
         }
@@ -190,7 +222,7 @@ impl Store {
         if id_taken(&tx, &todo.id)? {
             return Err(Error::DuplicateId(todo.id));
         }
-        let note_id = ensure_note(&tx, note, &now)?;
+        let note_id = ensure_note(&tx, &note, &now)?;
         insert(&tx, &note_id, &todo, &now)?;
         let saved = get(&tx, &todo.id)?.ok_or_else(|| Error::NotFound(todo.id.clone()))?;
         tx.commit()?;
@@ -263,6 +295,64 @@ impl Store {
         Ok(todo)
     }
 
+    /// Every note and todo changed after `since` (a cursor from an earlier
+    /// call, or 0 for everything), deleted ones included, and the cursor to
+    /// send next time.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] if a query fails.
+    pub fn changes(&mut self, since: u64) -> Result<Changes> {
+        let since = i64::try_from(since).unwrap_or(i64::MAX);
+        // One read transaction: the cursor matches the rows exactly.
+        let tx = self.conn.transaction()?;
+        let cursor: i64 = tx.query_row("SELECT version FROM sync_counter", [], |row| row.get(0))?;
+        let notes = tx
+            .prepare_cached(
+                "SELECT name, deleted_at IS NOT NULL FROM notes WHERE version > ?1 ORDER BY name",
+            )?
+            .query_map([since], |row| {
+                Ok(NoteChange {
+                    name: row.get(0)?,
+                    deleted: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let sql = format!(
+            "SELECT {TODO_COLUMNS}, t.deleted_at IS NOT NULL FROM todos t
+             JOIN notes n ON n.id = t.note_id
+             WHERE t.version > ?1 ORDER BY t.version"
+        );
+        let todos = tx
+            .prepare_cached(&sql)?
+            .query_map([since], |row| {
+                Ok(TodoChange {
+                    note: row.get(8)?,
+                    deleted: row.get(11)?,
+                    todo: read_todo(row)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        tx.commit()?;
+        Ok(Changes {
+            cursor: u64::try_from(cursor).unwrap_or(0),
+            notes,
+            todos,
+        })
+    }
+
+    /// `true` if a todo with this id was deleted.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] if the query fails.
+    pub fn is_deleted(&self, id: &Id) -> Result<bool> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT 1 FROM todos WHERE id = ?1 AND deleted_at IS NOT NULL")?
+            .exists([&id.0])?)
+    }
+
     /// Copies every todo of an Obsidian vault into the database, in one
     /// transaction. Never writes to the vault.
     ///
@@ -286,6 +376,7 @@ impl Store {
             let src =
                 fs::read_to_string(&full).map_err(|source| Error::Io { path: full, source })?;
             let note = path
+                .with_extension("")
                 .components()
                 .map(|part| part.as_os_str().to_string_lossy())
                 .collect::<Vec<_>>()
@@ -482,17 +573,21 @@ fn local_midnight(date: NaiveDate) -> String {
     local.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// Refuses names that look like paths leaving a folder, hidden ones, and
-/// names not ending in `.md`, so they stay what the old vault had.
-fn check_note(note: &str) -> Result<()> {
-    let path = Path::new(note);
-    let clean = !note.contains('\\')
-        && path.components().all(|part| match part {
-            Component::Normal(name) => !name.to_string_lossy().starts_with('.'),
-            _ => false,
+/// A note's name as stored: `/`-separated parts like `projects/dev`, none
+/// empty or starting with `.`. A trailing `.md` is dropped, so the old vault
+/// paths still find their note.
+fn note_name(note: &str) -> Result<String> {
+    let name = note.trim();
+    let name = name.strip_suffix(".md").unwrap_or(name);
+    let clean = !name.is_empty()
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && part.trim() == part
+                && !part.starts_with('.')
+                && !part.contains(['\\', '\n', '\r'])
         });
-    if clean && path.extension().is_some_and(|ext| ext == "md") {
-        Ok(())
+    if clean {
+        Ok(name.to_owned())
     } else {
         Err(Error::BadNote(note.to_owned()))
     }
@@ -542,7 +637,7 @@ mod tests {
 
     /// An empty store with `todo.md` as inbox.
     fn store() -> Store {
-        Store::open_in_memory("todo.md").expect("store")
+        Store::open_in_memory("todo").expect("store")
     }
 
     /// A temp vault holding `files` as (path, content).
@@ -568,17 +663,17 @@ mod tests {
         todo.id = saved.id.clone();
         assert_eq!(saved, todo);
         assert_eq!(store.get(&saved.id)?, Some(todo));
-        assert_eq!(store.notes()?, ["todo.md"]);
+        assert_eq!(store.notes()?, ["todo"]);
         Ok(())
     }
 
     #[test]
     fn notes_are_created_on_first_todo_and_listed_in_order() -> Result<()> {
         let mut store = store();
-        store.add_to("projects/dev.md", Todo::new(id("b"), "b", today()))?;
+        store.add_to("projects/dev", Todo::new(id("b"), "b", today()))?;
         store.add_to("a.md", Todo::new(id("a"), "a", today()))?;
-        store.add_to("projects/dev.md", Todo::new(id("c"), "c", today()))?;
-        assert_eq!(store.notes()?, ["a.md", "projects/dev.md"]);
+        store.add_to("projects/dev", Todo::new(id("c"), "c", today()))?;
+        assert_eq!(store.notes()?, ["a", "projects/dev"]);
         let listed: Vec<(String, String)> = store
             .todos_by_note(None)?
             .into_iter()
@@ -587,9 +682,9 @@ mod tests {
         assert_eq!(
             listed,
             [
-                ("a.md".into(), "a".into()),
-                ("projects/dev.md".into(), "b".into()),
-                ("projects/dev.md".into(), "c".into()),
+                ("a".into(), "a".into()),
+                ("projects/dev".into(), "b".into()),
+                ("projects/dev".into(), "c".into()),
             ]
         );
         assert_eq!(store.todos_by_note(Some("a.md"))?.len(), 1);
@@ -600,12 +695,13 @@ mod tests {
     fn bad_note_names_and_taken_ids_are_refused() -> Result<()> {
         let mut store = store();
         for note in [
-            "../out.md",
-            "/tmp/out.md",
-            ".obsidian/x.md",
-            "notes.txt",
-            "",
-            "a\\b.md",
+            "../out",
+            "/tmp/out",
+            ".obsidian/x",
+            "a//b",
+            " ",
+            "a/ b",
+            "a\\b",
         ] {
             assert!(
                 matches!(
@@ -671,14 +767,14 @@ mod tests {
             every: 1,
             unit: Unit::Week,
         });
-        store.add_to("home.md", todo)?;
+        store.add_to("home", todo)?;
         let done = store.update(&id("a"), |t| t.complete(today()))?;
         assert_eq!((done.status, done.recur), (Status::Done, None));
         // Completing again, or reopening and completing, adds nothing more.
         store.update(&id("a"), |t| t.complete(today()))?;
         store.update(&id("a"), Todo::reopen)?;
         store.update(&id("a"), |t| t.complete(today()))?;
-        let todos = store.todos_by_note(Some("home.md"))?;
+        let todos = store.todos_by_note(Some("home"))?;
         assert_eq!(todos.len(), 2);
         let next = &todos[1].1;
         assert_eq!(next.text, "water plants");
@@ -702,6 +798,37 @@ mod tests {
             |r| r.get(0),
         )?;
         assert_eq!(rows, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn changes_since_a_cursor() -> Result<()> {
+        let mut store = store();
+        store.add(Todo::new(id("a"), "a", today()))?;
+        store.add_to("b", Todo::new(id("b"), "b", today()))?;
+        let all = store.changes(0)?;
+        assert_eq!(all.notes.len(), 2);
+        let ids: Vec<&str> = all.todos.iter().map(|c| c.todo.id.0.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(store.changes(all.cursor)?.todos, []);
+
+        store.update(&id("a"), |t| t.text = "a2".into())?;
+        store.remove(&id("b"))?;
+        // A no-op change bumps nothing.
+        store.update(&id("a"), |_| {})?;
+        let next = store.changes(all.cursor)?;
+        assert!(next.cursor > all.cursor);
+        assert_eq!(next.notes, []);
+        let changed: Vec<(&str, &str, bool)> = next
+            .todos
+            .iter()
+            .map(|c| (c.todo.id.0.as_str(), c.todo.text.as_str(), c.deleted))
+            .collect();
+        assert_eq!(changed, [("a", "a2", false), ("b", "b", true)]);
+        assert_eq!(next.todos[1].note, "b");
+        assert!(store.is_deleted(&id("b"))?);
+        assert!(!store.is_deleted(&id("a"))?);
+        assert_eq!(store.changes(next.cursor)?.todos, []);
         Ok(())
     }
 
@@ -738,7 +865,7 @@ mod tests {
                 skipped: 0
             }
         );
-        assert_eq!(store.notes()?, ["empty.md", "projects/dev.md", "todo.md"]);
+        assert_eq!(store.notes()?, ["empty", "projects/dev", "todo"]);
         let a = store.get(&id("aaaaaa"))?.expect("a");
         assert_eq!(a.due, NaiveDate::from_ymd_opt(2026, 10, 30));
         assert_eq!(a.tags, ["dev"]);

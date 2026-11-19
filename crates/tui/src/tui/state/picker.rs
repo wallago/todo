@@ -47,7 +47,7 @@ impl Picker {
     }
 
     /// The note to open: the selected match, or with none, the typed
-    /// path as a new note (`.md` added).
+    /// path as a new note.
     pub(in crate::tui) fn choice(&self) -> Option<String> {
         if let Some(note) = self.selected() {
             return Some(note.to_owned());
@@ -61,14 +61,8 @@ impl Picker {
         if !self.matches.is_empty() || path.is_empty() {
             return None;
         }
-        let is_md = std::path::Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-        Some(if is_md {
-            path.to_owned()
-        } else {
-            format!("{path}.md")
-        })
+        // Old habit: `travel/norway.md` is the note `travel/norway`.
+        Some(path.strip_suffix(".md").unwrap_or(path).to_owned())
     }
 
     /// Edits the query or moves the cursor. Plain letters type, so the
@@ -131,44 +125,44 @@ mod tests {
 
     #[test]
     fn alt_with_a_movement_key_moves_instead_of_typing() {
-        let mut picker = Picker::new(vec!["a.md".into(), "b.md".into()]);
+        let mut picker = Picker::new(vec!["a".into(), "b".into()]);
         let keys = Keys {
             up: 'i',
             down: 'e',
             ..Keys::default()
         };
         picker.on_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT), keys);
-        assert_eq!(picker.selected(), Some("b.md"));
+        assert_eq!(picker.selected(), Some("b"));
         picker.on_key(
             KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL),
             keys,
         );
-        assert_eq!(picker.selected(), Some("a.md"));
+        assert_eq!(picker.selected(), Some("a"));
         assert_eq!(picker.query, "");
     }
 
     #[test]
     fn filters_as_you_type() {
         let mut picker = Picker::new(vec![
-            "projects/todo/main.md".into(),
-            "todo.md".into(),
-            "travel/japan.md".into(),
+            "projects/todo/main".into(),
+            "todo".into(),
+            "travel/japan".into(),
         ]);
         assert_eq!(picker.matches.len(), 3);
         type_text(&mut picker, "tdmain");
-        assert_eq!(picker.matches, vec!["projects/todo/main.md".to_owned()]);
-        assert_eq!(picker.selected(), Some("projects/todo/main.md"));
+        assert_eq!(picker.matches, vec!["projects/todo/main".to_owned()]);
+        assert_eq!(picker.selected(), Some("projects/todo/main"));
         type_text(&mut picker, "zzz");
         assert_eq!(picker.selected(), None);
     }
 
     #[test]
     fn unmatched_query_is_a_new_note() {
-        let mut picker = Picker::new(vec!["todo.md".into()]);
+        let mut picker = Picker::new(vec!["todo".into()]);
         assert_eq!(picker.new_note(), None);
         type_text(&mut picker, "travel/norway");
-        assert_eq!(picker.choice().as_deref(), Some("travel/norway.md"));
+        assert_eq!(picker.choice().as_deref(), Some("travel/norway"));
         type_text(&mut picker, ".md");
-        assert_eq!(picker.choice().as_deref(), Some("travel/norway.md"));
+        assert_eq!(picker.choice().as_deref(), Some("travel/norway"));
     }
 }

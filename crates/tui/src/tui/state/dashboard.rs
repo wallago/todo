@@ -8,7 +8,7 @@ use super::manager::step;
 /// An open todo that is pinned or has a due date, and the note it lives in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct DueTodo {
-    /// Note path, like `projects/todo.md`.
+    /// Note path, like `projects/todo`.
     pub(in crate::tui) note: String,
     /// The todo.
     pub(in crate::tui) todo: Todo,
@@ -91,7 +91,7 @@ mod tests {
         let mut dashboard = Dashboard::default();
         dashboard.set(vec![
             (
-                "a.md".into(),
+                "a".into(),
                 vec![
                     todo("late", Some(9), Status::Todo),
                     todo("closed", Some(1), Status::Done),
@@ -99,7 +99,7 @@ mod tests {
                 ],
             ),
             (
-                "b.md".into(),
+                "b".into(),
                 vec![todo("soon", Some(2), Status::Todo), {
                     let mut pinned = todo("pinned", None, Status::Todo);
                     pinned.pinned = true;
@@ -114,9 +114,6 @@ mod tests {
             .map(|due| due.todo.text.as_str())
             .collect();
         assert_eq!(ids, ["pinned", "soon", "late"]);
-        assert_eq!(
-            dashboard.selected().map(|due| due.note.as_str()),
-            Some("b.md")
-        );
+        assert_eq!(dashboard.selected().map(|due| due.note.as_str()), Some("b"));
     }
 }

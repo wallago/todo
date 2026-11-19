@@ -12,7 +12,7 @@ port = 3000
 # SQLite file, relative to this file. Created if missing.
 path = "todo.db"
 # Note that new todos go to when none is given.
-inbox = "misc.md"
+inbox = "misc"
 
 [mcp]
 # `Host` headers accepted on /mcp. Add your public hostname to serve remote clients.

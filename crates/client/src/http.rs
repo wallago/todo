@@ -5,7 +5,7 @@ use std::fmt;
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
-use crate::{ErrorBody, Id, NewTodo, Todo, TodoPatch, TodoQuery};
+use crate::{Changes, ErrorBody, Id, NewTodo, SyncQuery, Todo, TodoPatch, TodoQuery};
 
 /// What can go wrong when calling the server.
 #[derive(Debug, thiserror::Error)]
@@ -80,7 +80,7 @@ impl Client {
         send(self.request(Method::GET, None)).await
     }
 
-    /// The todos of one note, like `travel/japan.md`.
+    /// The todos of one note, like `travel/japan`.
     pub async fn list_note(&self, note: &str) -> Result<Vec<Todo>> {
         let query = TodoQuery {
             note: Some(note.to_owned()),
@@ -88,9 +88,19 @@ impl Client {
         send(self.request(Method::GET, None).query(&query)).await
     }
 
-    /// Every note's name, like `projects/dev.md`.
+    /// Every note's name, like `projects/dev`.
     pub async fn notes(&self) -> Result<Vec<String>> {
         send(self.call(Method::GET, "/api/notes")).await
+    }
+
+    /// Every note and todo changed since `since`, deleted ones included.
+    /// Pass 0 the first time, then the `cursor` of the last answer.
+    pub async fn sync(&self, since: u64) -> Result<Changes> {
+        send(
+            self.call(Method::GET, "/api/sync")
+                .query(&SyncQuery { since }),
+        )
+        .await
     }
 
     /// One todo.
@@ -114,7 +124,7 @@ impl Client {
         send(self.call(Method::POST, &format!("/api/todos/{}/complete", id.0))).await
     }
 
-    /// Removes a todo and its line.
+    /// Removes a todo. Removing one already removed is fine.
     pub async fn remove(&self, id: &Id) -> Result<()> {
         check(self.request(Method::DELETE, Some(id)).send().await?).await?;
         Ok(())
