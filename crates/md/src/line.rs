@@ -237,7 +237,7 @@ mod tests {
     fn numbers_and_hashes_in_text_stay_text() -> Result<(), &'static str> {
         let (_, todo) = parse_line("- [ ] Fix issue #42 by 2026-10-30").ok_or("not a task")?;
         assert_eq!(todo.text, "Fix issue #42 by 2026-10-30");
-        assert!(todo.tags.is_empty());
+        assert_eq!(todo.tags, Vec::<String>::new());
         assert_eq!(todo.due, None);
         Ok(())
     }

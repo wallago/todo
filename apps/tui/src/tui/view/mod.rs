@@ -1,0 +1,484 @@
+//! Widget renderer: the frame, sidebar and key bindings here, one file per page.
+
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Layout, Rect},
+    style::{Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Gauge, HighlightSpacing, List, ListState, Padding, Paragraph},
+};
+
+use super::{
+    state::{Focus, Page, State, SyncStatus},
+    theme::{ACCENT, ACCENT_BIS, BACKGROUND, ERROR, HIGHLIGHT, INFO, PRIMARY, SECONDARY, UNACCENT},
+};
+
+/// The about page.
+mod about;
+/// The `y/n` popup before a delete.
+mod confirm;
+/// The dashboard page.
+mod dashboard;
+/// The add and edit form.
+mod form;
+/// The manager page.
+mod manager;
+/// The note finder popup.
+mod picker;
+/// The stats page.
+mod stats;
+
+/// Spinner frames, one per tick.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The spinner frame for `tick`.
+fn spinner(tick: usize) -> &'static str {
+    SPINNER[tick % SPINNER.len()]
+}
+
+/// Renders the whole screen: frame, sidebar, page, popup and key bindings.
+pub(super) fn render(state: &mut State, frame: &mut Frame) {
+    let mut title = vec![
+        Span::raw(" "),
+        Span::styled(concat!(env!("CARGO_PKG_NAME"), " "), ACCENT).bold(),
+        Span::styled(concat!("- ", env!("CARGO_PKG_DESCRIPTION")), SECONDARY),
+        Span::raw(" "),
+    ];
+    if state.is_busy() {
+        title.push(Span::styled(format!("{} ", spinner(state.tick)), HIGHLIGHT));
+    }
+    let title = Line::from(title);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(ACCENT)
+        .fg(PRIMARY)
+        .bg(BACKGROUND)
+        .title(title)
+        .title(Line::from(sync_status(&state.sync)).right_aligned());
+    frame.render_widget(block, frame.area());
+    let [sidebar, page] = Layout::horizontal([Constraint::Length(24), Constraint::Min(0)])
+        .margin(2)
+        .spacing(2)
+        .areas(frame.area());
+    render_sidebar(state, frame, sidebar);
+    let focused = state.focus == Focus::Page;
+    let loading = state.is_loading(state.page).then(|| spinner(state.tick));
+    // The manager keeps its todos on screen while they reload.
+    let blank = state.page != Page::Manager || state.manager.todos.is_empty();
+    if let Some(spinner) = loading.filter(|_| blank) {
+        render_loading(state.page.name(), spinner, focused, frame, page);
+    } else {
+        let today = chrono::Local::now().date_naive();
+        match state.page {
+            Page::Dashboard => dashboard::render(&mut state.dashboard, today, focused, frame, page),
+            Page::Manager => {
+                manager::render(&mut state.manager, today, loading, focused, frame, page);
+            }
+            Page::Stats => stats::render(&state.stats, focused, frame, page),
+            Page::About => about::render(focused, frame, page),
+        }
+    }
+    if let Some(picker) = &mut state.picker {
+        picker::render(picker, &state.stats, frame, page);
+    }
+    if let Some(form) = &state.form {
+        form::render(form, frame, page);
+    }
+    if let Some(confirm) = &state.confirm {
+        confirm::render(confirm, frame, page);
+    }
+    render_key_bindings(state, frame, frame.area());
+}
+
+/// Bold due date: red once late, orange today, blue later this week
+/// (Monday to Sunday), muted after it or once closed.
+fn due_style(todo: &todo_client::Todo, today: chrono::NaiveDate) -> Style {
+    let sunday = today.week(chrono::Weekday::Mon).last_day();
+    let color = match todo.due {
+        _ if todo.status.is_closed() => SECONDARY,
+        Some(due) if due < today => ERROR,
+        Some(due) if due == today => HIGHLIGHT,
+        Some(due) if due <= sunday => INFO,
+        _ => SECONDARY,
+    };
+    Style::new().fg(color).bold()
+}
+
+/// A rounded pane titled `title`, lit up while `focused`.
+fn pane(title: &str, focused: bool) -> Block<'_> {
+    let (title_color, border) = if focused {
+        (ACCENT, ACCENT)
+    } else {
+        (SECONDARY, ACCENT_BIS)
+    };
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Line::from(format!(" {title} ")).fg(title_color).bold())
+        .border_style(border)
+        .padding(Padding::new(1, 1, 1, 0))
+}
+
+/// A list styled like praline's: muted rows, the selected one lit with a bar.
+fn list<'a, T: Into<ratatui::widgets::ListItem<'a>>>(
+    items: impl IntoIterator<Item = T>,
+    block: Block<'a>,
+) -> List<'a> {
+    List::new(items)
+        .block(block)
+        .style(SECONDARY)
+        .highlight_style(Style::new().fg(ACCENT).bg(ACCENT_BIS).bold())
+        .highlight_symbol(Span::styled("▌ ", ACCENT))
+        .highlight_spacing(HighlightSpacing::Always)
+}
+
+/// ` 📌` when pinned, ` 🔁` when it repeats.
+fn marks(todo: &todo_client::Todo) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if todo.pinned {
+        spans.push(Span::raw(" 📌"));
+    }
+    if todo.recur.is_some() {
+        spans.push(Span::styled(" 🔁", SECONDARY));
+    }
+    spans
+}
+
+/// Page navigation on top, how much of the open note is done below.
+fn render_sidebar(state: &State, frame: &mut Frame, rect: Rect) {
+    let [navigate, summary] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(rect);
+    let pages = list(
+        Page::ALL.iter().map(|&page| {
+            let mut row = vec![Span::raw(page.name())];
+            if state.is_loading(page) {
+                row.push(Span::styled(format!(" {}", spinner(state.tick)), HIGHLIGHT));
+            }
+            Line::from(row)
+        }),
+        pane("navigate", state.focus == Focus::Sidebar),
+    );
+    let mut selected = ListState::default().with_selected(Some(state.page.index()));
+    frame.render_stateful_widget(pages, navigate, &mut selected);
+
+    let block = pane("summary", false);
+    let inner = block.inner(summary);
+    frame.render_widget(block, summary);
+    let [header, content, _, bar] = Layout::vertical([Constraint::Length(1); 4]).areas(inner);
+    let (done, len) = state.manager.counts();
+    frame.render_widget(Line::from(Span::styled("TODOS", SECONDARY)), header);
+    frame.render_widget(
+        Line::from(Span::styled(format!("{done}/{len} done"), PRIMARY)).bold(),
+        content,
+    );
+    let gauge = Gauge::default()
+        .gauge_style(Style::new().fg(ACCENT).bg(ACCENT_BIS))
+        .ratio(ratio(done, len))
+        .label("")
+        .use_unicode(true);
+    frame.render_widget(gauge, bar);
+}
+
+/// `done / total`, 0 for an empty note.
+fn ratio(done: usize, total: usize) -> f64 {
+    #[expect(clippy::cast_precision_loss, reason = "a note's todos fit in an f64")]
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        done as f64 / total as f64
+    };
+    ratio.clamp(0.0, 1.0)
+}
+
+/// `⠋ loading…` in place of a page whose data hasn't come yet.
+fn render_loading(title: &str, spinner: &str, focused: bool, frame: &mut Frame, rect: Rect) {
+    let text = Paragraph::new(Line::from(vec![
+        Span::styled(spinner, HIGHLIGHT),
+        Span::styled(" loading…", SECONDARY),
+    ]))
+    .block(pane(title, focused));
+    frame.render_widget(text, rect);
+}
+
+/// `offline · 3 to send` on the right of the title bar, and the last refused change;
+/// nothing while every change is sent.
+fn sync_status(sync: &SyncStatus) -> Vec<Span<'static>> {
+    let mut parts = Vec::new();
+    if let Some(problem) = &sync.problem {
+        parts.push(problem.clone());
+    }
+    if sync.pending > 0 {
+        parts.push(format!("{} to send", sync.pending));
+    }
+    let mut spans = Vec::new();
+    if !parts.is_empty() {
+        spans.push(Span::styled(format!(" {} ", parts.join(" · ")), HIGHLIGHT));
+    }
+    if let Some(refused) = &sync.refused {
+        spans.push(Span::styled(format!(" refused: {refused} "), ERROR));
+    }
+    spans
+}
+
+/// The keys that work right now, centred on the bottom border.
+fn render_key_bindings(state: &State, frame: &mut Frame, rect: Rect) {
+    let [_, row] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(rect);
+    let bindings = state.key_bindings();
+    let mut spans = Vec::new();
+    for (i, (keys, desc)) in bindings.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.extend([
+            "[".fg(UNACCENT),
+            keys.fg(PRIMARY),
+            "→ ".fg(UNACCENT),
+            desc.fg(SECONDARY),
+            "]".fg(UNACCENT),
+        ]);
+    }
+    let line = Line::from(spans).alignment(Alignment::Center);
+    frame.render_widget(Paragraph::new(line), row);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::Cell,
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    };
+    use todo_client::{Id, Status, Todo};
+
+    use super::*;
+    use crate::tui::state::{Action, Loaded, NoteStats};
+
+    /// Draws `state` on an 80×24 screen and returns its text, row after row.
+    fn screen(state: &mut State) -> String {
+        let mut terminal = match Terminal::new(TestBackend::new(80, 24)) {
+            Ok(terminal) => terminal,
+            Err(never) => match never {},
+        };
+        let _ = terminal.draw(|frame| render(state, frame));
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(Cell::symbol)
+            .collect()
+    }
+
+    /// A todo with `text` and `status`, the rest left default.
+    fn todo(id: &str, text: &str, status: Status) -> Todo {
+        let mut todo = Todo::new(Id(id.into()), text, chrono::NaiveDate::MIN);
+        todo.status = status;
+        todo
+    }
+
+    /// A state with two notes, the first open with two todos.
+    fn with_todos() -> State {
+        let mut state = State {
+            page: Page::Manager,
+            ..State::default()
+        };
+        state.set_notes(vec!["projects/todo".into(), "travel".into()]);
+        state.manager.set_todos(vec![
+            todo("a", "write the tui", Status::Todo),
+            todo("b", "auth", Status::Done),
+        ]);
+        state
+    }
+
+    #[test]
+    fn manager_shows_the_note_its_todos_and_keys() {
+        let screen = screen(&mut with_todos());
+        assert!(screen.contains(env!("CARGO_PKG_NAME")));
+        assert!(screen.contains("manager"));
+        assert!(screen.contains("projects/todo"));
+        assert!(screen.contains("[ ] write the tui"));
+        assert!(screen.contains("[x] auth"));
+        assert!(screen.contains("1/2 done"));
+        assert!(screen.contains("quit"));
+    }
+
+    #[test]
+    fn picker_pops_up_over_the_manager() {
+        let mut state = with_todos();
+        state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        let screen = screen(&mut state);
+        assert!(screen.contains("find note"));
+        assert!(screen.contains("> t"));
+        assert!(screen.contains("travel"));
+    }
+
+    #[test]
+    fn form_pops_up_with_the_typed_title() {
+        let mut state = with_todos();
+        state.focus = Focus::Page;
+        state.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        state.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let screen = screen(&mut state);
+        assert!(screen.contains("new todo"));
+        assert!(screen.contains("╭ title ─"));
+        assert!(screen.contains("│ x▏"));
+        assert!(screen.contains("normal ▾"));
+        assert!(screen.contains("save"));
+    }
+
+    #[test]
+    fn a_long_title_scrolls_to_show_its_end() {
+        let mut state = with_todos();
+        state.focus = Focus::Page;
+        state.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        for c in "start of a really long title that goes on and on until the end".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let shown = screen(&mut state);
+        assert!(shown.contains("until the end▏"));
+        assert!(!shown.contains("start of"));
+    }
+
+    #[test]
+    fn form_lists_tags_with_checkboxes() {
+        let mut state = with_todos();
+        state.tags = vec!["car".into(), "pet".into()];
+        state.focus = Focus::Page;
+        let press = |state: &mut State, code| state.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        press(&mut state, KeyCode::Char('a'));
+        press(&mut state, KeyCode::BackTab);
+        press(&mut state, KeyCode::Char(' '));
+        let shown = screen(&mut state);
+        assert!(shown.contains("╭ tags ─"));
+        assert!(shown.contains("[x] #car"));
+        assert!(shown.contains("[ ] #pet"));
+        assert!(shown.contains("│ #car"));
+        press(&mut state, KeyCode::Char('z'));
+        assert!(screen(&mut state).contains("+ new #z"));
+    }
+
+    #[test]
+    fn picker_shows_when_each_note_is_due() {
+        let mut state = with_todos();
+        state.stats = vec![NoteStats {
+            note: "travel".into(),
+            done: 0,
+            total: 1,
+            next_due: Some(chrono::Local::now().date_naive()),
+        }];
+        state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let shown = screen(&mut state);
+        // Against the popup's right border.
+        assert!(shown.contains("travel "));
+        assert!(shown.contains("today │"));
+    }
+
+    #[test]
+    fn picker_offers_a_new_note_when_nothing_matches() {
+        let mut state = with_todos();
+        state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in "zz/new".chars() {
+            state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert!(screen(&mut state).contains("+ new note zz/new"));
+    }
+
+    #[test]
+    fn stats_shows_each_note() {
+        let mut state = State {
+            page: Page::Stats,
+            stats: vec![NoteStats {
+                note: "travel".into(),
+                done: 1,
+                total: 4,
+                next_due: None,
+            }],
+            ..State::default()
+        };
+        let screen = screen(&mut state);
+        assert!(screen.contains("travel"));
+        assert!(screen.contains("1/4"));
+    }
+
+    #[test]
+    fn stats_shows_loading_until_its_data_comes() {
+        let mut state = State {
+            page: Page::Stats,
+            ..State::default()
+        };
+        let id = state.start(&Action::LoadStats, false);
+        let loading = screen(&mut state);
+        assert!(loading.contains("loading…"));
+        assert!(loading.contains(&format!("stats {}", SPINNER[0])));
+        let row = NoteStats {
+            note: "travel".into(),
+            done: 1,
+            total: 4,
+            next_due: None,
+        };
+        state.finish(id, vec![Loaded::Stats(vec![row])]);
+        let loaded = screen(&mut state);
+        assert!(!loaded.contains("loading…"));
+        assert!(loaded.contains("1/4"));
+    }
+
+    #[test]
+    fn dashboard_shows_totals_and_due_todos() {
+        let mut late = todo("a", "renew visa", Status::Todo);
+        late.due = chrono::NaiveDate::from_ymd_opt(2026, 11, 1);
+        let mut state = State::default();
+        state.dashboard.set(vec![(
+            "travel/japan".into(),
+            vec![late, todo("b", "book flight", Status::Done)],
+        )]);
+        let screen = screen(&mut state);
+        assert!(screen.contains("dashboard"));
+        assert!(screen.contains("✓ 1 done"));
+        assert!(screen.contains("1 to do"));
+        assert!(screen.contains("due (1)"));
+        assert!(screen.contains("2026-11-01  renew visa  travel/japan"));
+    }
+
+    #[rstest::rstest]
+    #[case::late(-1, Status::Todo, ERROR)]
+    #[case::today(0, Status::Todo, HIGHLIGHT)]
+    #[case::this_sunday(6, Status::InProgress, INFO)]
+    #[case::next_monday(7, Status::Todo, SECONDARY)]
+    #[case::closed(-1, Status::Done, SECONDARY)]
+    fn styles_the_due_date(
+        #[case] days: i64,
+        #[case] status: Status,
+        #[case] color: ratatui::style::Color,
+    ) {
+        // A Monday, so its week ends 6 days later.
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+        let mut due = todo("a", "renew visa", status);
+        due.due = Some(today + chrono::Duration::days(days));
+        assert_eq!(due_style(&due, today), Style::new().fg(color).bold());
+    }
+
+    #[test]
+    fn about_shows_the_version() {
+        let mut state = State {
+            page: Page::About,
+            ..State::default()
+        };
+        assert!(screen(&mut state).contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn title_shows_offline_and_changes_to_send() {
+        let mut state = State {
+            sync: SyncStatus {
+                problem: Some("offline".into()),
+                pending: 3,
+                refused: Some("edit a1: 404: no todo a1".into()),
+            },
+            ..State::default()
+        };
+        let screen = screen(&mut state);
+        assert!(screen.contains("offline · 3 to send"));
+        assert!(screen.contains("refused: edit a1"));
+    }
+}

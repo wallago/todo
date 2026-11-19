@@ -17,9 +17,9 @@ target/
 http-client.private.env.json
 
 # ── Dev ──────────────────────────────────────────────────
-crates/tui/config.dev.toml
-crates/tui/token.dev
-crates/server/http-client.env.json
+apps/tui/config.dev.toml
+apps/tui/token.dev
+apps/server/http-client.env.json
 *.db
 *.db-wal
 *.db-shm
