@@ -146,11 +146,6 @@ fn marks(todo: &todo_client::Todo) -> Vec<Span<'static>> {
     spans
 }
 
-/// A note path without its `.md`, like `projects/todo`.
-fn note_name(note: &str) -> &str {
-    note.strip_suffix(".md").unwrap_or(note)
-}
-
 /// Page navigation on top, how much of the open note is done below.
 fn render_sidebar(state: &State, frame: &mut Frame, rect: Rect) {
     let [navigate, summary] =
@@ -278,7 +273,7 @@ mod tests {
             page: Page::Manager,
             ..State::default()
         };
-        state.set_notes(vec!["projects/todo.md".into(), "travel.md".into()]);
+        state.set_notes(vec!["projects/todo".into(), "travel".into()]);
         state.manager.set_todos(vec![
             todo("a", "write the tui", Status::Todo),
             todo("b", "auth", Status::Done),
@@ -292,7 +287,6 @@ mod tests {
         assert!(screen.contains(env!("CARGO_PKG_NAME")));
         assert!(screen.contains("manager"));
         assert!(screen.contains("projects/todo"));
-        assert!(!screen.contains("todo.md"));
         assert!(screen.contains("[ ] write the tui"));
         assert!(screen.contains("[x] auth"));
         assert!(screen.contains("1/2 done"));
@@ -359,7 +353,7 @@ mod tests {
     fn picker_shows_when_each_note_is_due() {
         let mut state = with_todos();
         state.stats = vec![NoteStats {
-            note: "travel.md".into(),
+            note: "travel".into(),
             done: 0,
             total: 1,
             next_due: Some(chrono::Local::now().date_naive()),
@@ -386,7 +380,7 @@ mod tests {
         let mut state = State {
             page: Page::Stats,
             stats: vec![NoteStats {
-                note: "travel.md".into(),
+                note: "travel".into(),
                 done: 1,
                 total: 4,
                 next_due: None,
@@ -409,7 +403,7 @@ mod tests {
         assert!(loading.contains("loading…"));
         assert!(loading.contains(&format!("stats {}", SPINNER[0])));
         let row = NoteStats {
-            note: "travel.md".into(),
+            note: "travel".into(),
             done: 1,
             total: 4,
             next_due: None,
@@ -426,7 +420,7 @@ mod tests {
         late.due = chrono::NaiveDate::from_ymd_opt(2026, 11, 1);
         let mut state = State::default();
         state.dashboard.set(vec![(
-            "travel/japan.md".into(),
+            "travel/japan".into(),
             vec![late, todo("b", "book flight", Status::Done)],
         )]);
         let screen = screen(&mut state);

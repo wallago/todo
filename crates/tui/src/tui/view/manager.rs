@@ -9,7 +9,7 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{due_style, list, marks, note_name, pane};
+use super::{due_style, list, marks, pane};
 use crate::tui::{
     state::Manager,
     theme::{ACCENT, ACCENT_BIS, PRIMARY, SECONDARY},
@@ -24,11 +24,7 @@ pub(super) fn render(
     frame: &mut Frame,
     rect: Rect,
 ) {
-    let mut title = manager
-        .note
-        .as_deref()
-        .map_or("no note", note_name)
-        .to_owned();
+    let mut title = manager.note.as_deref().unwrap_or("no note").to_owned();
     if let Some(spinner) = spinner {
         title = format!("{title} {spinner}");
     }

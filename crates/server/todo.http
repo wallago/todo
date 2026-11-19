@@ -10,7 +10,7 @@ Accept: application/json
 
 ### Todos of one note
 # @name list_note
-GET {{host}}/api/todos?note=projects/dev.md
+GET {{host}}/api/todos?note=projects/dev
 Authorization: Bearer {{token}}
 Accept: application/json
 
@@ -30,13 +30,19 @@ Accept: application/json
 # @name agenda_read_token
 GET {{host}}/api/agenda?token={{read_token}}
 
+### Everything changed since a sync cursor (0: everything)
+# @name sync
+GET {{host}}/api/sync?since=0
+Authorization: Bearer {{token}}
+Accept: application/json
+
 ### One todo by id (404 if unknown)
 # @name one
 GET {{host}}/api/todos/a1b2c3
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Add a todo (goes to the inbox note)
+### Add a todo to a note (created if missing)
 # @name add
 POST {{host}}/api/todos
 Authorization: Bearer {{token}}
@@ -44,6 +50,7 @@ Content-Type: application/json
 
 {
   "text": "Buy milk",
+  "note": "errands",
   "priority": "high",
   "due": "2026-10-30",
   "tags": ["errand"]
@@ -57,7 +64,7 @@ Content-Type: application/json
 
 {
   "text": "Plan the enclosure",
-  "note": "projects/dongle.md"
+  "note": "projects/dongle"
 }
 
 ### Add a pinned, weekly todo with no due date

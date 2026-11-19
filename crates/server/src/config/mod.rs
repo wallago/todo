@@ -23,10 +23,6 @@ pub(crate) struct Config {
     /// Database config.
     #[serde(default)]
     pub(crate) database: database::DatabaseConfig,
-    /// Old `[vault]` section, from before the database. Ignored with a
-    /// warning so an old config still starts. Remove once no config has it.
-    #[serde(default)]
-    pub(crate) vault: Option<toml::Value>,
     /// MCP config.
     #[serde(default)]
     pub(crate) mcp: mcp::McpConfig,
@@ -74,13 +70,6 @@ impl Config {
             config.server.token_file = config.server.token_file.map(|file| dir.join(file));
             config.server.read_token_file =
                 config.server.read_token_file.map(|file| dir.join(file));
-        }
-        if config.vault.is_some() {
-            tracing::warn!(
-                "{}: `[vault]` is no longer used, todos live in `[database] path`; \
-                 run `todo-server import <vault>` once, then remove it",
-                path.display()
-            );
         }
         Ok(config)
     }

@@ -10,7 +10,7 @@ use ratatui::{
 };
 use todo_client::Todo;
 
-use super::{due_style, list, marks, note_name, pane};
+use super::{due_style, list, marks, pane};
 use crate::tui::{
     state::{Dashboard, DueTodo},
     theme::{ACCENT, ACCENT_BIS, HIGHLIGHT, PRIMARY, SECONDARY},
@@ -95,10 +95,7 @@ fn row(due: &DueTodo, today: NaiveDate, width: usize) -> Line<'_> {
     let pad = width.saturating_sub(label.width());
     spans.extend(label.spans);
     spans.push(Span::raw(" ".repeat(pad)));
-    spans.push(Span::styled(
-        format!("  {}", note_name(&due.note)),
-        SECONDARY,
-    ));
+    spans.push(Span::styled(format!("  {}", due.note), SECONDARY));
     Line::from(spans)
 }
 

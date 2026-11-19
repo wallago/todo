@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Clear, ListItem},
 };
 
-use super::{list, note_name, pane};
+use super::{list, pane};
 use crate::tui::{
     state::{NoteStats, Picker},
     theme::{ACCENT, BACKGROUND, HIGHLIGHT, PRIMARY},
@@ -38,7 +38,7 @@ pub(super) fn render(picker: &mut Picker, stats: &[NoteStats], frame: &mut Frame
     if let Some(note) = picker.new_note() {
         let hint = Line::from(vec![
             Span::styled("+ new note ", ACCENT),
-            Span::styled(note_name(&note).to_owned(), PRIMARY),
+            Span::styled(note.clone(), PRIMARY),
         ]);
         frame.render_widget(hint, matches);
         return;
@@ -47,7 +47,7 @@ pub(super) fn render(picker: &mut Picker, stats: &[NoteStats], frame: &mut Frame
     // Less the `▌ ` highlight bar.
     let width = usize::from(matches.width).saturating_sub(2);
     let rows = picker.matches.iter().map(|note| {
-        let name = note_name(note);
+        let name = note.as_str();
         let due = stats
             .iter()
             .find(|row| &row.note == note)

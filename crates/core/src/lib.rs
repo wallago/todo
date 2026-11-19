@@ -229,6 +229,42 @@ impl Todo {
     }
 }
 
+/// What changed since a sync cursor: answer of `GET /api/sync`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Changes {
+    /// Send it as `since` next time to get only what changed after this.
+    pub cursor: u64,
+    /// Notes created or deleted since.
+    #[serde(default)]
+    pub notes: Vec<NoteChange>,
+    /// Todos added, changed or deleted since.
+    #[serde(default)]
+    pub todos: Vec<TodoChange>,
+}
+
+/// A note in [`Changes`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteChange {
+    /// Like `projects/dev`.
+    pub name: String,
+    /// Gone: forget it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
+}
+
+/// A todo in [`Changes`], as it is now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TodoChange {
+    /// The note it's in.
+    pub note: String,
+    /// Gone: forget it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
+    /// The todo.
+    #[serde(flatten)]
+    pub todo: Todo,
+}
+
 /// Rewrites `"type": [T, "null"]` (how schemars spells `Option<T>`) as
 /// `anyOf: [{"type": T}, {"type": "null"}]`, which more MCP clients accept.
 ///

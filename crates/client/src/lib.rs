@@ -8,7 +8,7 @@
 //! use todo_client::{Client, NewTodo};
 //!
 //! let client = Client::new("http://127.0.0.1:3000");
-//! let todo = client.add(&NewTodo { text: "buy milk".into(), ..NewTodo::default() }).await?;
+//! let todo = client.add(&NewTodo { text: "buy milk".into(), note: "errands".into(), ..NewTodo::default() }).await?;
 //! client.complete(&todo.id).await?;
 //! # Ok(())
 //! # }
@@ -16,7 +16,7 @@
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-pub use todo_core::{Id, Priority, Recur, Status, Todo, Unit};
+pub use todo_core::{Changes, Id, NoteChange, Priority, Recur, Status, Todo, TodoChange, Unit};
 
 /// Request functions.
 #[cfg(feature = "http")]
@@ -30,6 +30,11 @@ pub use http::{Client, Error, Result};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schemars", schemars(transform = todo_core::nullable_any_of))]
 pub struct NewTodo {
+    /// Id chosen by the client, a UUID, so an offline client can send the
+    /// same add twice safely: the second answers the todo already saved.
+    /// The server makes one if left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
     /// What to do.
     pub text: String,
     /// Priority, normal if left out.
@@ -41,10 +46,8 @@ pub struct NewTodo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Note to add it to, like `projects/dev.md`.
-    /// Created if missing. The inbox note if left out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    /// Note to add it to, like `projects/dev`. Created if missing.
+    pub note: String,
     /// Pin it: being worked on, usually with no due date.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
@@ -56,9 +59,17 @@ pub struct NewTodo {
 /// Query of `GET /api/todos`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoQuery {
-    /// Only todos in this note, like `travel/japan.md`.
+    /// Only todos in this note, like `travel/japan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Query of `GET /api/sync`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncQuery {
+    /// The `cursor` of the last sync; 0 (or left out) for everything.
+    #[serde(default)]
+    pub since: u64,
 }
 
 /// Body of `PATCH /api/todos/{id}`. Fields left out stay as they are.
@@ -141,9 +152,14 @@ mod tests {
     }
 
     #[test]
-    fn new_todo_needs_only_text() {
-        let new: NewTodo = serde_json::from_str(r#"{"text": "buy milk"}"#).expect("json");
-        assert_eq!(new.text, "buy milk");
+    fn new_todo_needs_only_text_and_note() {
+        let new: NewTodo =
+            serde_json::from_str(r#"{"text": "buy milk", "note": "errands"}"#).expect("json");
+        assert_eq!(
+            (new.text.as_str(), new.note.as_str()),
+            ("buy milk", "errands")
+        );
         assert_eq!(new.priority, Priority::Normal);
+        assert!(serde_json::from_str::<NewTodo>(r#"{"text": "buy milk"}"#).is_err());
     }
 }

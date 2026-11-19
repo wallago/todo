@@ -32,7 +32,7 @@ pub async fn run(args: &Args) -> Result<()> {
         return import(args, vault, db.as_deref());
     }
     let config = Config::load(args.config.as_deref())?;
-    let state = AppState::open(&config.database.path, &config.database.inbox)?;
+    let state = AppState::open(&config.database.path)?;
     server::start(&config.server, state, &config.mcp).await?;
     tracing::info!("Server stopped");
     Ok(())
@@ -41,16 +41,11 @@ pub async fn run(args: &Args) -> Result<()> {
 /// `todo-server import`: copies a vault into the database.
 #[expect(clippy::print_stdout, reason = "the report is the command's output")]
 fn import(args: &Args, vault: &std::path::Path, db: Option<&std::path::Path>) -> Result<()> {
-    let (path, inbox) = if let Some(path) = db {
-        (
-            path.to_owned(),
-            config::database::DatabaseConfig::default().inbox,
-        )
-    } else {
-        let config = Config::load(args.config.as_deref())?;
-        (config.database.path, config.database.inbox)
+    let path = match db {
+        Some(path) => path.to_owned(),
+        None => Config::load(args.config.as_deref())?.database.path,
     };
-    let report = todo_store::Store::open(&path, inbox)?.import_vault(vault)?;
+    let report = todo_store::Store::open(&path)?.import_vault(vault)?;
     println!(
         "{}: {} notes read, {} todos added, {} already there",
         path.display(),

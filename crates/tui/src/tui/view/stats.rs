@@ -7,7 +7,7 @@ use ratatui::{
     widgets::LineGauge,
 };
 
-use super::{note_name, pane, ratio};
+use super::{pane, ratio};
 use crate::tui::{
     state::NoteStats,
     theme::{ACCENT, ACCENT_BIS, PRIMARY},
@@ -20,14 +20,14 @@ pub(super) fn render(stats: &[NoteStats], focused: bool, frame: &mut Frame, rect
     frame.render_widget(block, rect);
     let width = stats
         .iter()
-        .map(|row| note_name(&row.note).len())
+        .map(|row| row.note.as_str().len())
         .max()
         .unwrap_or(0);
     let rows = Layout::vertical(vec![Constraint::Length(1); stats.len()]).split(inner);
     for (row, area) in stats.iter().zip(rows.iter()) {
         let label = format!(
             "{:<width$}  {:>3}/{:<3} ",
-            note_name(&row.note),
+            row.note.as_str(),
             row.done,
             row.total
         );

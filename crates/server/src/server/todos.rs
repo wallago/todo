@@ -1,4 +1,4 @@
-//! Todo routes: `/api/todos` and `/api/notes`.
+//! Todo routes: `/api/todos`, `/api/notes` and `/api/sync`.
 
 use axum::{
     Json, Router,
@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::NaiveDate;
-use todo_client::{Id, NewTodo, Status, Todo, TodoPatch, TodoQuery};
+use todo_client::{Changes, Id, NewTodo, Status, SyncQuery, Todo, TodoPatch, TodoQuery};
 
 use super::api_error::ApiError;
 use crate::app::AppState;
@@ -19,6 +19,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/api/todos/{id}", get(one).patch(update).delete(remove))
         .route("/api/todos/{id}/complete", post(complete))
         .route("/api/notes", get(notes))
+        .route("/api/sync", get(sync))
 }
 
 /// `GET /api/todos`: every todo, or only those of `?note=`.
@@ -30,9 +31,18 @@ async fn list(
     Ok(Json(todos.into_iter().map(|(_, todo)| todo).collect()))
 }
 
-/// `GET /api/notes`: every note's name, like `projects/dev.md`.
+/// `GET /api/notes`: every note's name, like `projects/dev`.
 async fn notes(State(state): State<AppState>) -> Result<Json<Vec<String>>, ApiError> {
     Ok(Json(state.list_notes()?))
+}
+
+/// `GET /api/sync?since=N`: every note and todo changed after cursor `N`
+/// (0: everything), deleted ones included, and the next cursor.
+async fn sync(
+    State(state): State<AppState>,
+    Query(query): Query<SyncQuery>,
+) -> Result<Json<Changes>, ApiError> {
+    Ok(Json(state.store().changes(query.since)?))
 }
 
 /// `GET /api/todos/{id}`: one todo, or 404.
@@ -44,12 +54,19 @@ async fn one(
     todo.map(Json).ok_or_else(|| ApiError::not_found(&id))
 }
 
-/// `POST /api/todos`: adds a todo to the inbox note, or to `note`. Answers 201.
+/// `POST /api/todos`: adds a todo to `note`. Answers
+/// 201, or 200 with the saved todo if `id` was already added.
 async fn add(
     State(state): State<AppState>,
     Json(new): Json<NewTodo>,
 ) -> Result<(StatusCode, Json<Todo>), ApiError> {
-    Ok((StatusCode::CREATED, Json(state.add_todo(new)?)))
+    let (todo, created) = state.add_todo(new)?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(todo)))
 }
 
 /// `PATCH /api/todos/{id}`: changes the fields that are sent.
@@ -70,7 +87,8 @@ async fn complete(
     Ok(Json(state.complete_todo(&Id(id))?))
 }
 
-/// `DELETE /api/todos/{id}`: removes it. Answers 204.
+/// `DELETE /api/todos/{id}`: removes it. Answers 204, also if it was
+/// already removed, so an offline client can retry.
 async fn remove(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -91,20 +109,32 @@ impl AppState {
         Ok(self.store().notes()?)
     }
 
-    /// Adds a todo to the inbox note, or to `new.note`.
-    pub(super) fn add_todo(&self, new: NewTodo) -> Result<Todo, ApiError> {
+    /// Adds a todo to `new.note`. With an `id`
+    /// already saved, returns that todo instead; `false` then.
+    pub(super) fn add_todo(&self, new: NewTodo) -> Result<(Todo, bool), ApiError> {
         check(Some(&new.text), Some(&new.tags))?;
-        let mut todo = Todo::new(Id(String::new()), new.text.trim(), today());
+        let id = match new.id {
+            Some(id) if uuid::Uuid::parse_str(&id.0).is_err() => {
+                return Err(ApiError::bad_request(format!(
+                    "id `{}` is not a UUID",
+                    id.0
+                )));
+            }
+            Some(id) => {
+                if let Some(saved) = self.store().get(&id)? {
+                    return Ok((saved, false));
+                }
+                id
+            }
+            None => Id(String::new()),
+        };
+        let mut todo = Todo::new(id, new.text.trim(), today());
         todo.priority = new.priority;
         todo.due = new.due;
         todo.tags = new.tags;
         todo.pinned = new.pinned;
         todo.recur = new.recur;
-        let mut store = self.store();
-        Ok(match new.note {
-            Some(note) => store.add_to(&note, todo)?,
-            None => store.add(todo)?,
-        })
+        Ok((self.store().add_to(&new.note, todo)?, true))
     }
 
     /// Changes the fields that are set in `patch`.
@@ -122,8 +152,11 @@ impl AppState {
 
     /// Removes a todo.
     pub(super) fn remove_todo(&self, id: &Id) -> Result<(), ApiError> {
-        self.store().remove(id)?;
-        Ok(())
+        let mut store = self.store();
+        match store.remove(id) {
+            Err(todo_store::Error::NotFound(_)) if store.is_deleted(id)? => Ok(()),
+            other => other.map(drop).map_err(ApiError::from),
+        }
     }
 }
 
@@ -245,9 +278,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_writes_to_the_inbox() {
+    async fn add_writes_to_its_note() {
         let (state, app) = test_app(NOTE);
-        let new = json!({"text": " buy milk ", "priority": "high", "tags": ["errand"]});
+        let new =
+            json!({"note": "todo", "text": " buy milk ", "priority": "high", "tags": ["errand"]});
         let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
         let todo: Todo = serde_json::from_value(body).expect("todo");
@@ -255,20 +289,20 @@ mod tests {
         assert_eq!(todo.priority, todo_client::Priority::High);
         assert_eq!(todo.created, Some(today()));
         assert_eq!(todo.tags, ["errand"]);
-        let saved = state.list_todos(Some("todo.md")).expect("todos");
+        let saved = state.list_todos(Some("todo")).expect("todos");
         assert_eq!(saved.last().map(|(_, t)| t), Some(&todo));
     }
 
     #[tokio::test]
     async fn add_can_target_another_note() {
         let (_state, app) = test_app(NOTE);
-        let new = json!({"text": "ship it", "note": "projects/dev.md"});
+        let new = json!({"text": "ship it", "note": "projects/dev"});
         let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
 
         let (_, body) = send(&app, Method::GET, "/api/notes", None).await;
-        assert_eq!(body, json!(["projects/dev.md", "todo.md"]));
-        let (_, body) = send(&app, Method::GET, "/api/todos?note=projects/dev.md", None).await;
+        assert_eq!(body, json!(["projects/dev", "todo"]));
+        let (_, body) = send(&app, Method::GET, "/api/todos?note=projects/dev", None).await;
         assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
         assert_eq!(body[0]["text"], "ship it");
 
@@ -285,12 +319,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_needs_a_note() {
+        let (_state, app) = test_app(NOTE);
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(json!({"text": "x"}))).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let new = json!({"text": "x", "note": ""});
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn add_refuses_text_that_breaks_the_line() {
         let (_state, app) = test_app(NOTE);
         for new in [
-            json!({"text": "  "}),
-            json!({"text": "two\nlines"}),
-            json!({"text": "ok", "tags": ["two words"]}),
+            json!({"note": "todo", "text": "  "}),
+            json!({"note": "todo", "text": "two\nlines"}),
+            json!({"note": "todo", "text": "ok", "tags": ["two words"]}),
         ] {
             let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
             assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -300,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn patch_changes_only_what_is_sent() {
         let (state, app) = test_app(NOTE);
-        let patch = json!({"text": "a, renamed", "due": null});
+        let patch = json!({"note": "todo", "text": "a, renamed", "due": null});
         let (status, body) = send(&app, Method::PATCH, "/api/todos/aaaaaa", Some(patch)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["text"], "a, renamed");
@@ -326,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn pin_and_recur_over_the_api() {
         let (_state, app) = test_app(NOTE);
-        let new = json!({"text": "gym", "pinned": true, "recur": {"every": 2, "unit": "day"}});
+        let new = json!({"note": "todo", "text": "gym", "pinned": true, "recur": {"every": 2, "unit": "day"}});
         let (status, body) = send(&app, Method::POST, "/api/todos", Some(new)).await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(body["pinned"], true);
@@ -379,8 +423,64 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (status, _) = send(&app, Method::GET, "/api/todos/aaaaaa", None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+        // Again: already gone is fine, an unknown id is not.
         let (status, _) = send(&app, Method::DELETE, "/api/todos/aaaaaa", None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = send(&app, Method::DELETE, "/api/todos/zzzzzz", None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn add_with_a_client_id_is_safe_to_retry() {
+        let (_state, app) = test_app(NOTE);
+        let id = "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+        let new = json!({"id": id, "text": "offline", "note": "phone"});
+        let (status, first) = send(&app, Method::POST, "/api/todos", Some(new.clone())).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(first["id"], id);
+        let (status, again) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again, first);
+        let (_, todos) = send(&app, Method::GET, "/api/todos?note=phone", None).await;
+        assert_eq!(todos.as_array().map(Vec::len), Some(1));
+
+        let bad = json!({"id": "not-a-uuid", "text": "x", "note": "todo"});
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(bad)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // A deleted id can't come back.
+        send(&app, Method::DELETE, &format!("/api/todos/{id}"), None).await;
+        let new = json!({"id": id, "text": "offline", "note": "todo"});
+        let (status, _) = send(&app, Method::POST, "/api/todos", Some(new)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn sync_returns_changes_after_the_cursor() {
+        let (_state, app) = test_app(NOTE);
+        let (status, all) = send(&app, Method::GET, "/api/sync", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(all["notes"], json!([{"name": "todo"}]));
+        assert_eq!(all["todos"].as_array().map(Vec::len), Some(2));
+        let cursor = all["cursor"].as_u64().unwrap_or_default();
+
+        send(&app, Method::POST, "/api/todos/aaaaaa/complete", None).await;
+        send(&app, Method::DELETE, "/api/todos/bbbbbb", None).await;
+        let uri = format!("/api/sync?since={cursor}");
+        let (_, next) = send(&app, Method::GET, &uri, None).await;
+        assert_eq!(next["notes"], json!([]));
+        let todos = next["todos"].as_array().cloned().unwrap_or_default();
+        let seen: Vec<(Value, Value, Value)> = todos
+            .iter()
+            .map(|t| (t["id"].clone(), t["status"].clone(), t["deleted"].clone()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (json!("aaaaaa"), json!("done"), Value::Null),
+                (json!("bbbbbb"), json!("done"), json!(true)),
+            ]
+        );
+        assert_eq!(todos[0]["note"], "todo");
     }
 
     #[tokio::test]
@@ -396,13 +496,13 @@ mod tests {
         assert_eq!(client.list().await?.len(), 2);
         let new = NewTodo {
             text: "buy milk".into(),
-            note: Some("errands/shop.md".into()),
+            note: "errands/shop".into(),
             ..NewTodo::default()
         };
         let todo = client.add(&new).await?;
-        assert_eq!(client.notes().await?, ["errands/shop.md", "todo.md"]);
+        assert_eq!(client.notes().await?, ["errands/shop", "todo"]);
         assert_eq!(
-            client.list_note("errands/shop.md").await?,
+            client.list_note("errands/shop").await?,
             std::slice::from_ref(&todo)
         );
         assert_eq!(client.get(&todo.id).await?, todo);
@@ -412,8 +512,19 @@ mod tests {
         };
         assert_eq!(client.update(&Id("aaaaaa".into()), &patch).await?.due, None);
         assert_eq!(client.complete(&todo.id).await?.status, Status::Done);
+        let synced = client.sync(0).await?;
+        assert!(synced.notes.iter().any(|n| n.name == "errands/shop"));
         client.remove(&todo.id).await?;
         assert!(client.get(&todo.id).await.is_err_and(|e| e.is_not_found()));
+        let after = client.sync(synced.cursor).await?;
+        assert_eq!(
+            after
+                .todos
+                .iter()
+                .map(|c| (&c.todo.id, c.deleted))
+                .collect::<Vec<_>>(),
+            [(&todo.id, true)]
+        );
 
         // The server's message comes through.
         let empty = NewTodo::default();
