@@ -10,7 +10,7 @@ rust-version = "1.88"
 
 [dependencies]
 chrono     = { version = "0.4", default-features = false, features = ["clock"] }
-rusqlite   = { version = "0.37", features = ["bundled", "chrono"] }
+rusqlite   = { version = "0.43", features = ["bundled", "chrono"] }
 serde      = "1"
 serde_json = "1"
 thiserror  = "2.0.19"
