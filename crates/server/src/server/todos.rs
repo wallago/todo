@@ -367,6 +367,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_can_start_a_recurrence() {
+        let (_state, app) = test_app(NOTE);
+        let patch = json!({"recur": {"every": 1, "unit": "week"}});
+        let (status, body) = send(&app, Method::PATCH, "/api/todos/aaaaaa", Some(patch)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["recur"], json!({"every": 1, "unit": "week"}), "{body}");
+    }
+
+    #[tokio::test]
     async fn complete_is_safe_to_retry() {
         let (_state, app) = test_app(NOTE);
         let (status, first) = send(&app, Method::POST, "/api/todos/aaaaaa/complete", None).await;

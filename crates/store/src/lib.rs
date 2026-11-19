@@ -231,7 +231,8 @@ impl Store {
         change(&mut todo);
         todo.id = id.clone();
         let completed = before.status != Status::Done && todo.status == Status::Done;
-        if let (true, Some(recur)) = (completed, todo.recur.take()) {
+        // Only taken on completion: any other edit keeps the recurrence.
+        if let Some(recur) = todo.recur.take_if(|_| completed) {
             let today = todo.done.unwrap_or_else(|| Local::now().date_naive());
             let mut next = recur.follow_up(&todo, today);
             next.id = Id(Uuid::now_v7().to_string());
@@ -740,6 +741,22 @@ mod tests {
         })?;
         assert_eq!((saved.pinned, saved.recur), (false, None));
         assert_eq!(store.get(&id("a"))?, Some(saved));
+        Ok(())
+    }
+
+    #[test]
+    fn editing_a_recurring_todo_keeps_it_recurring() -> Result<()> {
+        let mut store = store();
+        let todo = store.add_to("gym", Todo::new(id("g1"), "gym", today()))?;
+        let weekly = Some(Recur {
+            every: 1,
+            unit: Unit::Week,
+        });
+        let saved = store.update(&todo.id, |t| t.recur = weekly)?;
+        assert_eq!(saved.recur, weekly);
+        let renamed = store.update(&todo.id, |t| "swim".clone_into(&mut t.text))?;
+        assert_eq!(renamed.recur, weekly);
+        assert_eq!(store.get(&todo.id)?.and_then(|t| t.recur), weekly);
         Ok(())
     }
 
