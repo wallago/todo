@@ -5,7 +5,7 @@ url = "http://127.0.0.1:3000"
 # token_file = "token"
 
 # Letters that move, on top of the arrow keys. Defaults: vim's hjkl.
-# In the note finder, hold Alt (or Ctrl) with them.
+# In the topic finder, hold Alt (or Ctrl) with them.
 [keys]
 up    = "k"
 down  = "j"

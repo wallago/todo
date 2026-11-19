@@ -42,7 +42,7 @@ impl From<todo_store::Error> for ApiError {
         match error {
             Store::NotFound(id) => Self::not_found(&id.0),
             Store::DuplicateId(_) => Self(StatusCode::CONFLICT, error.to_string()),
-            Store::BadNote(_) => Self::bad_request(error.to_string()),
+            Store::BadTopic(_) => Self::bad_request(error.to_string()),
             Store::Db(_) | Store::Io { .. } => {
                 tracing::error!("{error}");
                 Self(

@@ -1,4 +1,4 @@
-//! The stats page: how much of each note is done.
+//! The stats page: how much of each topic is done.
 
 use ratatui::{
     Frame,
@@ -9,25 +9,25 @@ use ratatui::{
 
 use super::{pane, ratio};
 use crate::tui::{
-    state::NoteStats,
+    state::TopicStats,
     theme::{ACCENT, ACCENT_BIS, PRIMARY},
 };
 
-/// One gauge per note, as many as fit.
-pub(super) fn render(stats: &[NoteStats], focused: bool, frame: &mut Frame, rect: Rect) {
+/// One gauge per topic, as many as fit.
+pub(super) fn render(stats: &[TopicStats], focused: bool, frame: &mut Frame, rect: Rect) {
     let block = pane("stats", focused);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let width = stats
         .iter()
-        .map(|row| row.note.as_str().len())
+        .map(|row| row.topic.as_str().len())
         .max()
         .unwrap_or(0);
     let rows = Layout::vertical(vec![Constraint::Length(1); stats.len()]).split(inner);
     for (row, area) in stats.iter().zip(rows.iter()) {
         let label = format!(
             "{:<width$}  {:>3}/{:<3} ",
-            row.note.as_str(),
+            row.topic.as_str(),
             row.done,
             row.total
         );

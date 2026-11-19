@@ -39,7 +39,7 @@ export interface Todo {
 export interface NewTodo {
   id: string;
   text: string;
-  note: string;
+  topic: string;
   priority: Priority;
   due: string | null;
   tags: string[];
@@ -58,13 +58,13 @@ export interface TodoPatch {
   recur?: Recur | null;
 }
 
-/** A todo change in `GET /api/sync`: the todo plus its note. */
-export type TodoChange = Todo & { note: string; deleted?: boolean };
+/** A todo change in `GET /api/sync`: the todo plus its topic. */
+export type TodoChange = Todo & { topic: string; deleted?: boolean };
 
 /** Answer of `GET /api/sync?since=N`. */
 export interface Changes {
   cursor: number;
-  notes?: { name: string; deleted?: boolean }[];
+  topics?: { name: string; deleted?: boolean }[];
   todos?: TodoChange[];
 }
 

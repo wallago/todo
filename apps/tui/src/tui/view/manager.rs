@@ -1,4 +1,4 @@
-//! The manager page: one note's todos.
+//! The manager page: one topic's todos.
 
 use chrono::NaiveDate;
 use ratatui::{
@@ -15,7 +15,7 @@ use crate::tui::{
     theme::{ACCENT, ACCENT_BIS, PRIMARY, SECONDARY},
 };
 
-/// The open note's todos, with `spinner` after the title while they reload.
+/// The open topic's todos, with `spinner` after the title while they reload.
 pub(super) fn render(
     manager: &mut Manager,
     today: NaiveDate,
@@ -24,7 +24,7 @@ pub(super) fn render(
     frame: &mut Frame,
     rect: Rect,
 ) {
-    let mut title = manager.note.as_deref().unwrap_or("no note").to_owned();
+    let mut title = manager.topic.as_deref().unwrap_or("no topic").to_owned();
     if let Some(spinner) = spinner {
         title = format!("{title} {spinner}");
     }

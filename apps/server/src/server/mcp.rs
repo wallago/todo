@@ -46,8 +46,8 @@ pub(super) struct ListArgs {
     query: Option<String>,
     /// Only todos with this tag, without the `#`.
     tag: Option<String>,
-    /// Only todos in this note, like `travel/japan`. See `list_notes`.
-    note: Option<String>,
+    /// Only todos in this topic, like `travel/japan`. See `list_topics`.
+    topic: Option<String>,
     /// Only pinned todos (being worked on, usually without a due date).
     #[serde(default)]
     pinned: bool,
@@ -69,11 +69,11 @@ impl ListArgs {
     }
 }
 
-/// A todo and the note it is in, as `list_todos` shows it.
+/// A todo and the topic it is in, as `list_todos` shows it.
 #[derive(Debug, Serialize)]
 struct Listed {
-    /// The note's name, like `projects/dev`.
-    note: String,
+    /// The topic's name, like `projects/dev`.
+    topic: String,
     /// The todo.
     #[serde(flatten)]
     todo: Todo,
@@ -118,34 +118,34 @@ impl Todos {
 
     /// Lists todos.
     #[tool(
-        description = "List todos with the note each is in. Open ones only unless `all` is true; filter by text with `query`, by `tag`, by `note`, or `pinned` only.",
+        description = "List todos with the topic each is in. Open ones only unless `all` is true; filter by text with `query`, by `tag`, by `topic`, or `pinned` only.",
         annotations(read_only_hint = true)
     )]
     async fn list_todos(&self, Parameters(args): Parameters<ListArgs>) -> Answer {
         json(
             &self
                 .state
-                .list_todos(args.note.as_deref())
+                .list_todos(args.topic.as_deref())
                 .map_err(err)?
                 .into_iter()
                 .filter(|(_, todo)| args.keeps(todo))
-                .map(|(note, todo)| Listed { note, todo })
+                .map(|(topic, todo)| Listed { topic, todo })
                 .collect::<Vec<_>>(),
         )
     }
 
-    /// Lists notes.
+    /// Lists topics.
     #[tool(
-        description = "List the notes, named like paths, e.g. `travel/japan`. Each note is usually one subject.",
+        description = "List the topics, named like paths, e.g. `travel/japan`. Each topic is usually one subject.",
         annotations(read_only_hint = true)
     )]
-    async fn list_notes(&self) -> Answer {
-        json(&self.state.list_notes().map_err(err)?)
+    async fn list_topics(&self) -> Answer {
+        json(&self.state.list_topics().map_err(err)?)
     }
 
     /// Adds a todo.
     #[tool(
-        description = "Add a todo to `note` (created if missing; see list_notes). `pinned` marks work in progress with no deadline; `recur` (e.g. {\"every\": 1, \"unit\": \"week\"}) makes it come back when completed. It is always tagged `claude`. Returns it with its new id."
+        description = "Add a todo to `topic` (created if missing; see list_topics). `pinned` marks work in progress with no deadline; `recur` (e.g. {\"every\": 1, \"unit\": \"week\"}) makes it come back when completed. It is always tagged `claude`. Returns it with its new id."
     )]
     async fn add_todo(&self, Parameters(mut new): Parameters<NewTodo>) -> Answer {
         if !new.tags.iter().any(|tag| tag == CLAUDE_TAG) {
@@ -194,8 +194,8 @@ impl ServerHandler for Todos {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Personal todo list, grouped in notes. \
-                Each note is usually one subject (a project, a trip...): list_notes \
+                "Personal todo list, grouped in topics. \
+                Each topic is usually one subject (a project, a trip...): list_topics \
                 shows them. Call list_todos first to find ids.",
             )
     }
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_shows_and_filters_notes() {
+    async fn list_shows_and_filters_topics() {
         let mut store = todo_store::Store::open_in_memory().expect("store");
         let today = chrono::NaiveDate::default();
         store
@@ -271,14 +271,14 @@ mod tests {
             .expect("add");
         let todos = Todos::new(AppState::new(store));
 
-        let notes = todos.list_notes().await.expect("notes");
-        assert!(notes.contains(r#""travel""#), "{notes}");
+        let topics = todos.list_topics().await.expect("topics");
+        assert!(topics.contains(r#""travel""#), "{topics}");
         let args = ListArgs {
-            note: Some("travel".into()),
+            topic: Some("travel".into()),
             ..ListArgs::default()
         };
         let listed = todos.list_todos(Parameters(args)).await.expect("todos");
-        assert!(listed.contains(r#""note": "travel""#), "{listed}");
+        assert!(listed.contains(r#""topic": "travel""#), "{listed}");
         assert!(listed.contains(r#""id": "bbbbbb""#), "{listed}");
         assert!(!listed.contains("aaaaaa"), "{listed}");
     }
@@ -292,13 +292,13 @@ mod tests {
 
         todos
             .add_todo(Parameters(add(
-                r#"{"text": "a", "note": "todo", "tags": ["dev"]}"#,
+                r#"{"text": "a", "topic": "todo", "tags": ["dev"]}"#,
             )))
             .await
             .expect("added");
         todos
             .add_todo(Parameters(add(
-                r#"{"text": "b", "note": "todo", "tags": ["claude"]}"#,
+                r#"{"text": "b", "topic": "todo", "tags": ["claude"]}"#,
             )))
             .await
             .expect("added");

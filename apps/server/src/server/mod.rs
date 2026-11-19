@@ -128,18 +128,18 @@ async fn shutdown() {
     }
 }
 
-/// A router over a database in memory, filled by importing `note` (Obsidian
-/// Tasks lines) as `todo.md`, imported as note `todo`. Without a token.
+/// A router over a database in memory, filled by importing `md` (Obsidian
+/// Tasks lines) as `todo.md`, imported as topic `todo`. Without a token.
 #[cfg(test)]
-fn test_app(note: &str) -> (AppState, Router) {
-    test_router(note, None)
+fn test_app(md: &str) -> (AppState, Router) {
+    test_router(md, None)
 }
 
 /// Same as [`test_app`], with these tokens.
 #[cfg(test)]
-fn test_router(note: &str, tokens: Option<auth::Tokens>) -> (AppState, Router) {
+fn test_router(md: &str, tokens: Option<auth::Tokens>) -> (AppState, Router) {
     let dir = tempfile::tempdir().expect("temp dir");
-    std::fs::write(dir.path().join("todo.md"), note).expect("write note");
+    std::fs::write(dir.path().join("todo.md"), md).expect("write note");
     let mut store = todo_store::Store::open_in_memory().expect("store");
     store.import_vault(dir.path()).expect("import");
     let state = AppState::new(store);

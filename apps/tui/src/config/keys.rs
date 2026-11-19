@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::prelude::*;
 
 /// `[keys]`: letters that move, on top of the arrow keys.
-/// In the note finder, hold Alt (or Ctrl) with them, since plain letters type.
+/// In the topic finder, hold Alt (or Ctrl) with them, since plain letters type.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Keys {

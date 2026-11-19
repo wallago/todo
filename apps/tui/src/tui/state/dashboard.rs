@@ -1,15 +1,15 @@
-//! The dashboard page: totals and every due todo, across all notes.
+//! The dashboard page: totals and every due todo, across all topics.
 
 use ratatui::widgets::ListState;
 use todo_client::Todo;
 
 use super::manager::step;
 
-/// An open todo that is pinned or has a due date, and the note it lives in.
+/// An open todo that is pinned or has a due date, and the topic it lives in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct DueTodo {
-    /// Note path, like `projects/todo`.
-    pub(in crate::tui) note: String,
+    /// Topic path, like `projects/todo`.
+    pub(in crate::tui) topic: String,
     /// The todo.
     pub(in crate::tui) todo: Todo,
 }
@@ -28,12 +28,12 @@ pub(in crate::tui) struct Dashboard {
 }
 
 impl Dashboard {
-    /// Recounts from every note's todos, keeping the cursor row in range.
-    pub(in crate::tui) fn set(&mut self, notes: Vec<(String, Vec<Todo>)>) {
+    /// Recounts from every topic's todos, keeping the cursor row in range.
+    pub(in crate::tui) fn set(&mut self, topics: Vec<(String, Vec<Todo>)>) {
         self.done = 0;
         self.open = 0;
         self.due.clear();
-        for (note, todos) in notes {
+        for (topic, todos) in topics {
             for todo in todos {
                 if todo.status.is_closed() {
                     self.done += 1;
@@ -42,14 +42,14 @@ impl Dashboard {
                 self.open += 1;
                 if todo.due.is_some() || todo.pinned {
                     self.due.push(DueTodo {
-                        note: note.clone(),
+                        topic: topic.clone(),
                         todo,
                     });
                 }
             }
         }
         self.due.sort_by(|a, b| {
-            (!a.todo.pinned, a.todo.due, &a.note).cmp(&(!b.todo.pinned, b.todo.due, &b.note))
+            (!a.todo.pinned, a.todo.due, &a.topic).cmp(&(!b.todo.pinned, b.todo.due, &b.topic))
         });
         let at = self.list.selected().unwrap_or(0);
         self.list.select(if self.due.is_empty() {
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn counts_and_sorts_due_todos_across_notes() {
+    fn counts_and_sorts_due_todos_across_topics() {
         let mut dashboard = Dashboard::default();
         dashboard.set(vec![
             (
@@ -114,6 +114,9 @@ mod tests {
             .map(|due| due.todo.text.as_str())
             .collect();
         assert_eq!(ids, ["pinned", "soon", "late"]);
-        assert_eq!(dashboard.selected().map(|due| due.note.as_str()), Some("b"));
+        assert_eq!(
+            dashboard.selected().map(|due| due.topic.as_str()),
+            Some("b")
+        );
     }
 }

@@ -1,7 +1,7 @@
 [package]
 name         = "todo-store"
 version      = "0.1.0"
-description  = "Owns the todo database (SQLite): notes, todos, and the one-time vault import."
+description  = "Owns the todo database (SQLite): topics, todos, and the one-time vault import."
 authors      = ["wallago <tbd@gmail.com>"]
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/wallago/todo"

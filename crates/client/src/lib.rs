@@ -8,7 +8,7 @@
 //! use todo_client::{Client, NewTodo};
 //!
 //! let client = Client::new("http://127.0.0.1:3000");
-//! let todo = client.add(&NewTodo { text: "buy milk".into(), note: "errands".into(), ..NewTodo::default() }).await?;
+//! let todo = client.add(&NewTodo { text: "buy milk".into(), topic: "errands".into(), ..NewTodo::default() }).await?;
 //! client.complete(&todo.id).await?;
 //! # Ok(())
 //! # }
@@ -16,7 +16,7 @@
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-pub use todo_core::{Changes, Id, NoteChange, Priority, Recur, Status, Todo, TodoChange, Unit};
+pub use todo_core::{Changes, Id, Priority, Recur, Status, Todo, TodoChange, TopicChange, Unit};
 
 /// Request functions.
 #[cfg(feature = "http")]
@@ -46,8 +46,10 @@ pub struct NewTodo {
     /// Tags without the leading `#`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Note to add it to, like `projects/dev`. Created if missing.
-    pub note: String,
+    /// Topic to add it to, like `projects/dev`. Created if missing.
+    /// `note` is its old name, still sent by clients not updated yet.
+    #[serde(alias = "note")]
+    pub topic: String,
     /// Pin it: being worked on, usually with no due date.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
@@ -59,9 +61,9 @@ pub struct NewTodo {
 /// Query of `GET /api/todos`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoQuery {
-    /// Only todos in this note, like `travel/japan`.
+    /// Only todos in this topic, like `travel/japan`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub topic: Option<String>,
 }
 
 /// Query of `GET /api/sync`.
@@ -206,14 +208,17 @@ mod tests {
     }
 
     #[test]
-    fn new_todo_needs_only_text_and_note() {
+    fn new_todo_needs_only_text_and_topic() {
         let new: NewTodo =
-            serde_json::from_str(r#"{"text": "buy milk", "note": "errands"}"#).expect("json");
+            serde_json::from_str(r#"{"text": "buy milk", "topic": "errands"}"#).expect("json");
         assert_eq!(
-            (new.text.as_str(), new.note.as_str()),
+            (new.text.as_str(), new.topic.as_str()),
             ("buy milk", "errands")
         );
         assert_eq!(new.priority, Priority::Normal);
         assert!(serde_json::from_str::<NewTodo>(r#"{"text": "buy milk"}"#).is_err());
+        let old: NewTodo =
+            serde_json::from_str(r#"{"text": "buy milk", "note": "errands"}"#).expect("json");
+        assert_eq!(old.topic, "errands", "`note` is still read");
     }
 }

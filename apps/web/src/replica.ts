@@ -15,9 +15,9 @@ export interface Pending {
   op: Op;
 }
 
-/** One todo and the note it's in. */
+/** One todo and the topic it's in. */
 export interface Entry {
-  note: string;
+  topic: string;
   todo: Todo;
 }
 
@@ -27,8 +27,8 @@ export interface Replica {
   cursor: number;
   /** The server refused a change: the next sync fetches everything. */
   resync: boolean;
-  /** Every note name, sorted. */
-  notes: string[];
+  /** Every topic name, sorted. */
+  topics: string[];
   /** Every todo, in the order they arrived. */
   todos: Entry[];
   /** Changes not sent yet, oldest first. */
@@ -39,7 +39,7 @@ export interface Replica {
 
 /** An empty copy. */
 export function emptyReplica(): Replica {
-  return { cursor: 0, resync: false, notes: [], todos: [], outbox: [], nextSeq: 0 };
+  return { cursor: 0, resync: false, topics: [], todos: [], outbox: [], nextSeq: 0 };
 }
 
 /** The todo an op is about. */
@@ -55,21 +55,21 @@ function queue(replica: Replica, op: Op): Replica {
   };
 }
 
-/** Adds `body` to its note and queues it; a status other than todo is an edit after. */
+/** Adds `body` to its topic and queues it; a status other than todo is an edit after. */
 export function addTodo(
   replica: Replica,
   body: NewTodo,
   status: Todo["status"],
   today: string,
 ): Replica {
-  const notes = replica.notes.includes(body.note)
-    ? replica.notes
-    : [...replica.notes, body.note].sort();
+  const topics = replica.topics.includes(body.topic)
+    ? replica.topics
+    : [...replica.topics, body.topic].sort();
   let next = queue(
     {
       ...replica,
-      notes,
-      todos: [...replica.todos, { note: body.note, todo: newTodo(body, today) }],
+      topics,
+      todos: [...replica.todos, { topic: body.topic, todo: newTodo(body, today) }],
     },
     { kind: "add", body },
   );
@@ -116,30 +116,30 @@ export function since(replica: Replica): number {
 export function merge(replica: Replica, changes: Changes, from: number): Replica {
   const waiting = new Set(replica.outbox.map((pending) => opId(pending.op)));
   let todos = replica.todos;
-  let notes = new Set(replica.notes);
+  let topics = new Set(replica.topics);
   let resync = replica.resync;
   if (from === 0) {
     todos = todos.filter((entry) => waiting.has(entry.todo.id));
-    notes = new Set(todos.map((entry) => entry.note));
+    topics = new Set(todos.map((entry) => entry.topic));
     resync = false;
   }
-  for (const note of changes.notes ?? []) {
-    if (note.deleted) notes.delete(note.name);
-    else notes.add(note.name);
+  for (const topic of changes.topics ?? []) {
+    if (topic.deleted) topics.delete(topic.name);
+    else topics.add(topic.name);
   }
   todos = [...todos];
-  for (const { note, deleted, ...todo } of changes.todos ?? []) {
+  for (const { topic, deleted, ...todo } of changes.todos ?? []) {
     if (waiting.has(todo.id)) continue;
     const at = todos.findIndex((entry) => entry.todo.id === todo.id);
     if (deleted) {
       if (at >= 0) todos.splice(at, 1);
     } else if (at >= 0) {
-      todos[at] = { note, todo };
+      todos[at] = { topic, todo };
     } else {
-      todos.push({ note, todo });
+      todos.push({ topic, todo });
     }
   }
-  return { ...replica, todos, notes: [...notes].sort(), cursor: changes.cursor, resync };
+  return { ...replica, todos, topics: [...topics].sort(), cursor: changes.cursor, resync };
 }
 
 /** Reads a saved copy, or an empty one if it's missing or unreadable. */
@@ -155,6 +155,12 @@ export function parseReplica(saved: string | null): Replica {
       Array.isArray(parsed.todos) &&
       Array.isArray(parsed.outbox)
     ) {
+      // Saved before notes were called topics: keep the changes not sent
+      // yet (the server still reads `note`) and fetch everything else again.
+      if ("notes" in parsed) {
+        const { outbox, nextSeq } = parsed as Partial<Replica>;
+        return { ...emptyReplica(), outbox: outbox ?? [], nextSeq: nextSeq ?? 0, resync: true };
+      }
       return { ...emptyReplica(), ...(parsed as Partial<Replica>) };
     }
   } catch {

@@ -32,7 +32,7 @@ function holder(start: Replica) {
 const milk = {
   id: "11111111-1111-4111-8111-111111111111",
   text: "milk",
-  note: "errands",
+  topic: "errands",
   priority: "normal" as const,
   due: null,
   tags: [],
@@ -46,7 +46,7 @@ describe("sync", () => {
     replica = updateTodo(replica, milk.id, { status: "done" }, TODAY);
     const changes: Changes = {
       cursor: 7,
-      todos: replica.todos.map((e) => ({ ...e.todo, note: e.note })),
+      todos: replica.todos.map((e) => ({ ...e.todo, topic: e.topic })),
     };
     const { calls, api } = server((_method, path) =>
       path.startsWith("/api/sync") ? json(200, changes) : json(200, {}),
@@ -83,7 +83,7 @@ describe("sync", () => {
       {
         cursor: 3,
         todos: [
-          { id: "a", text: "a", status: "todo", priority: "normal", created: TODAY, note: "n" },
+          { id: "a", text: "a", status: "todo", priority: "normal", created: TODAY, topic: "n" },
         ],
       },
       0,

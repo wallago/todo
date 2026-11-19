@@ -193,7 +193,7 @@ li.todo.in_progress .text::before {
   color: var(--warn);
 }
 
-li.note a {
+li.topic a {
   display: flex;
   justify-content: space-between;
   padding: 12px 0;
@@ -203,7 +203,7 @@ li.note a {
   overflow-wrap: anywhere;
 }
 
-li.note .count {
+li.topic .count {
   flex: none;
   margin-left: 12px;
   color: var(--muted);

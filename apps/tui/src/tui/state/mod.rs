@@ -11,9 +11,9 @@ mod confirm;
 mod dashboard;
 /// The add and edit form.
 mod form;
-/// The manager page: one note's todos.
+/// The manager page: one topic's todos.
 mod manager;
-/// The note finder popup.
+/// The topic finder popup.
 mod picker;
 
 pub(super) use confirm::Confirm;
@@ -46,12 +46,12 @@ pub(super) enum Focus {
 /// Page shown on the right, picked in the sidebar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Page {
-    /// Totals and every due todo, across notes.
+    /// Totals and every due todo, across topics.
     #[default]
     Dashboard,
-    /// One note's todos, the note picked with `/`.
+    /// One topic's todos, the topic picked with `/`.
     Manager,
-    /// How much of each note is done.
+    /// How much of each topic is done.
     Stats,
     /// Name, version and description of the crate.
     About,
@@ -91,19 +91,19 @@ impl Page {
 /// Server calls a key asks for; the event loop runs them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Action {
-    /// Reload the notes, then what the current page shows.
+    /// Reload the topics, then what the current page shows.
     Refresh,
-    /// Reload the manager's note.
+    /// Reload the manager's topic.
     LoadTodos,
-    /// Reload every note's counts and next due date.
+    /// Reload every topic's counts and next due date.
     LoadStats,
     /// Reload the dashboard.
     LoadDashboard,
-    /// Reload the manager's note, then put the cursor on this todo.
+    /// Reload the manager's topic, then put the cursor on this todo.
     Jump(Id),
     /// Tick the selected todo, or reopen it if it's closed.
     Toggle,
-    /// Add this todo to the manager's note, then give it this status.
+    /// Add this todo to the manager's topic, then give it this status.
     Add(NewTodo, Status),
     /// Apply this patch to this todo.
     Change(Id, TodoPatch),
@@ -111,29 +111,29 @@ pub(super) enum Action {
     Delete(Id),
 }
 
-/// Done and total todos of one note.
+/// Done and total todos of one topic.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct NoteStats {
-    /// Note path, like `projects/todo`.
-    pub(super) note: String,
+pub(super) struct TopicStats {
+    /// Topic path, like `projects/todo`.
+    pub(super) topic: String,
     /// Done or cancelled todos.
     pub(super) done: usize,
     /// Every todo.
     pub(super) total: usize,
-    /// Earliest due date of its open todos, shown in the note picker.
+    /// Earliest due date of its open todos, shown in the topic picker.
     pub(super) next_due: Option<chrono::NaiveDate>,
 }
 
 /// What a finished server call brings back, applied by [`State::finish`].
 #[derive(Debug)]
 pub(super) enum Loaded {
-    /// Every note path.
-    Notes(Vec<String>),
-    /// This note's todos.
+    /// Every topic path.
+    Topics(Vec<String>),
+    /// This topic's todos.
     Todos(String, Vec<Todo>),
-    /// Every note's counts.
-    Stats(Vec<NoteStats>),
-    /// Every note, with its todos, for the dashboard.
+    /// Every topic's counts.
+    Stats(Vec<TopicStats>),
+    /// Every topic, with its todos, for the dashboard.
     Dashboard(Vec<(String, Vec<Todo>)>),
     /// Every todo in the vault, for its tags.
     Tags(Vec<Todo>),
@@ -167,20 +167,20 @@ pub(super) struct State {
     pub(super) focus: Focus,
     /// Page shown and selected in the sidebar.
     pub(super) page: Page,
-    /// Note paths from the server, like `projects/todo`.
-    pub(super) notes: Vec<String>,
+    /// Topic paths from the server, like `projects/todo`.
+    pub(super) topics: Vec<String>,
     /// The dashboard page.
     pub(super) dashboard: Dashboard,
     /// The manager page.
     pub(super) manager: Manager,
-    /// The note finder, while open.
+    /// The topic finder, while open.
     pub(super) picker: Option<Picker>,
     /// The add or edit form, while open.
     pub(super) form: Option<Form>,
     /// The delete confirmation, while open.
     pub(super) confirm: Option<Confirm>,
-    /// The stats page, one row per note.
-    pub(super) stats: Vec<NoteStats>,
+    /// The stats page, one row per topic.
+    pub(super) stats: Vec<TopicStats>,
     /// How the link to the server is doing.
     pub(super) sync: SyncStatus,
     /// Whether a sync asked for with `r` (or at start) still runs.
@@ -204,7 +204,7 @@ impl Default for State {
             running: true,
             focus: Focus::default(),
             page: Page::default(),
-            notes: Vec::new(),
+            topics: Vec::new(),
             dashboard: Dashboard::default(),
             manager: Manager::default(),
             picker: None,
@@ -223,13 +223,13 @@ impl Default for State {
 }
 
 impl State {
-    /// Replaces the notes. The manager keeps its note, even a new one with
+    /// Replaces the topics. The manager keeps its topic, even a new one with
     /// no file yet; with none open, it opens the first one.
-    pub(super) fn set_notes(&mut self, notes: Vec<String>) {
-        if self.manager.note.is_none() {
-            self.manager.open(notes.first().cloned());
+    pub(super) fn set_topics(&mut self, topics: Vec<String>) {
+        if self.manager.topic.is_none() {
+            self.manager.open(topics.first().cloned());
         }
-        self.notes = notes;
+        self.topics = topics;
     }
 
     /// Replaces the known tags with those of `todos`, every todo in the vault.
@@ -274,16 +274,16 @@ impl State {
     /// Puts one result in place.
     fn apply(&mut self, loaded: Loaded) {
         match loaded {
-            Loaded::Notes(notes) => self.set_notes(notes),
-            // Dropped if another note was opened meanwhile.
-            Loaded::Todos(note, todos) => {
+            Loaded::Topics(topics) => self.set_topics(topics),
+            // Dropped if another topic was opened meanwhile.
+            Loaded::Todos(topic, todos) => {
                 self.learn_tags(&todos);
-                if self.manager.note.as_ref() == Some(&note) {
+                if self.manager.topic.as_ref() == Some(&topic) {
                     self.manager.set_todos(todos);
                 }
             }
             Loaded::Stats(stats) => self.stats = stats,
-            Loaded::Dashboard(notes) => self.dashboard.set(notes),
+            Loaded::Dashboard(topics) => self.dashboard.set(topics),
             Loaded::Tags(todos) => self.set_tags(&todos),
             Loaded::Changed(todo) => {
                 self.learn_tags(std::slice::from_ref(&todo));
@@ -330,14 +330,14 @@ impl State {
                     None
                 }
                 KeyCode::Enter => {
-                    let note = picker.choice();
+                    let topic = picker.choice();
                     self.picker = None;
-                    note.map(|note| {
-                        // A new note has no file until its first todo: ask for it.
-                        if !self.notes.contains(&note) {
+                    topic.map(|topic| {
+                        // A new topic has no file until its first todo: ask for it.
+                        if !self.topics.contains(&topic) {
                             self.form = Some(Form::new(today(), self.tags.clone()));
                         }
-                        self.manager.open(Some(note));
+                        self.manager.open(Some(topic));
                         Action::LoadTodos
                     })
                 }
@@ -381,8 +381,8 @@ impl State {
             (_, _, KeyCode::Char('r')) => return Some(Action::Refresh),
             (_, Page::Manager, KeyCode::Char('/')) => {
                 self.focus = Focus::Page;
-                self.picker = Some(Picker::new(self.notes.clone()));
-                // For each note's next due date.
+                self.picker = Some(Picker::new(self.topics.clone()));
+                // For each topic's next due date.
                 return Some(Action::LoadStats);
             }
             (Focus::Sidebar, _, _) if up || down => return self.turn_page(down),
@@ -396,7 +396,7 @@ impl State {
             (Focus::Page, Page::Manager, KeyCode::Enter) if self.manager.selected().is_some() => {
                 return Some(Action::Toggle);
             }
-            (_, Page::Manager, KeyCode::Char('a')) if self.manager.note.is_some() => {
+            (_, Page::Manager, KeyCode::Char('a')) if self.manager.topic.is_some() => {
                 self.form = Some(Form::new(today(), self.tags.clone()));
             }
             (_, Page::Manager, KeyCode::Char('c')) => {
@@ -428,11 +428,11 @@ impl State {
         }
     }
 
-    /// Opens the selected due todo's note in the manager, cursor on it.
+    /// Opens the selected due todo's topic in the manager, cursor on it.
     fn open_due(&mut self) -> Option<Action> {
         let due = self.dashboard.selected()?.clone();
         self.page = Page::Manager;
-        self.manager.open(Some(due.note));
+        self.manager.open(Some(due.topic));
         Some(Action::Jump(due.todo.id))
     }
 
@@ -479,7 +479,7 @@ impl State {
             (Focus::Sidebar, Page::Manager) => &[
                 ("↑↓", "page"),
                 ("tab", "enter"),
-                ("/", "find note"),
+                ("/", "find topic"),
                 ("q", "quit"),
             ],
             (Focus::Sidebar, _) => &[
@@ -489,7 +489,7 @@ impl State {
                 ("q", "quit"),
             ],
             (Focus::Page, Page::Manager) => &[
-                ("/", "note"),
+                ("/", "topic"),
                 ("↑↓", "move"),
                 ("enter", "done"),
                 ("a/c/d", "add/edit/del"),
@@ -533,13 +533,13 @@ mod tests {
         }
     }
 
-    /// A state with three notes, the first open.
-    fn with_notes() -> State {
+    /// A state with three topics, the first open.
+    fn with_topics() -> State {
         let mut state = State {
             page: Page::Manager,
             ..State::default()
         };
-        state.set_notes(vec![
+        state.set_topics(vec![
             "projects/todo/main".into(),
             "travel/japan".into(),
             "todo".into(),
@@ -557,18 +557,18 @@ mod tests {
     }
 
     #[test]
-    fn opens_the_first_note_and_keeps_it_on_refresh() {
-        let mut state = with_notes();
-        assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main"));
+    fn opens_the_first_topic_and_keeps_it_on_refresh() {
+        let mut state = with_topics();
+        assert_eq!(state.manager.topic.as_deref(), Some("projects/todo/main"));
         state.manager.open(Some("new".into()));
         // Not on the server yet, but still the open one.
-        state.set_notes(vec!["a".into()]);
-        assert_eq!(state.manager.note.as_deref(), Some("new"));
+        state.set_topics(vec!["a".into()]);
+        assert_eq!(state.manager.topic.as_deref(), Some("new"));
     }
 
     /// A state on the manager page, with one todo selected.
     fn with_a_todo() -> State {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.focus = Focus::Page;
         state.manager.set_todos(vec![Todo::new(
             Id("a1".into()),
@@ -636,12 +636,12 @@ mod tests {
     }
 
     #[test]
-    fn picking_a_new_note_opens_it_and_asks_for_a_todo() {
-        let mut state = with_notes();
+    fn picking_a_new_topic_opens_it_and_asks_for_a_todo() {
+        let mut state = with_topics();
         state.on_key(press(KeyCode::Char('/')));
         type_text(&mut state, "zz/new");
         assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::LoadTodos));
-        assert_eq!(state.manager.note.as_deref(), Some("zz/new"));
+        assert_eq!(state.manager.topic.as_deref(), Some("zz/new"));
         assert!(state.form.as_ref().is_some_and(|form| !form.is_edit()));
     }
 
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn enter_on_a_due_todo_opens_it_in_the_manager() {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.page = Page::Dashboard;
         state.focus = Focus::Page;
         let mut todo = Todo::new(Id("t1".into()), "visa", chrono::NaiveDate::MIN);
@@ -682,7 +682,7 @@ mod tests {
             Some(Action::Jump(Id("t1".into())))
         );
         assert_eq!(state.page, Page::Manager);
-        assert_eq!(state.manager.note.as_deref(), Some("travel/japan"));
+        assert_eq!(state.manager.topic.as_deref(), Some("travel/japan"));
         // The todos come, then the cursor lands on it.
         let id = state.start(&Action::Jump(Id("t1".into())), false);
         let other = Todo::new(Id("t0".into()), "flight", chrono::NaiveDate::MIN);
@@ -694,13 +694,13 @@ mod tests {
 
     #[test]
     fn stats_page_loads_until_its_call_finishes() {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.page = Page::Stats;
         let id = state.start(&Action::LoadStats, false);
         assert!(state.is_loading(Page::Stats));
         assert!(!state.is_loading(Page::Manager));
-        let row = NoteStats {
-            note: "todo".into(),
+        let row = TopicStats {
+            topic: "todo".into(),
             done: 1,
             total: 2,
             next_due: None,
@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn a_quiet_refresh_shows_no_spinner() {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.page = Page::Stats;
         let id = state.start(&Action::Refresh, true);
         assert!(!state.is_busy());
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn a_sync_stops_the_spinner_and_keeps_pending_counts() {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.syncing = true;
         assert!(state.is_busy());
         let sync = SyncStatus {
@@ -740,8 +740,8 @@ mod tests {
     }
 
     #[test]
-    fn todos_of_a_note_closed_meanwhile_are_dropped() {
-        let mut state = with_notes();
+    fn todos_of_a_topic_closed_meanwhile_are_dropped() {
+        let mut state = with_topics();
         let id = state.start(&Action::LoadTodos, false);
         state.manager.open(Some("travel/japan".into()));
         let todo = Todo::new(Id("a1".into()), "milk", chrono::NaiveDate::MIN);
@@ -751,8 +751,8 @@ mod tests {
     }
 
     #[test]
-    fn picker_opens_the_chosen_note() {
-        let mut state = with_notes();
+    fn picker_opens_the_chosen_topic() {
+        let mut state = with_topics();
         state.on_key(press(KeyCode::Char('/')));
         // `q` filters instead of quitting while the popup is open.
         type_text(&mut state, "jpq");
@@ -764,22 +764,22 @@ mod tests {
         );
         assert_eq!(state.on_key(press(KeyCode::Enter)), Some(Action::LoadTodos));
         assert!(state.picker.is_none());
-        assert_eq!(state.manager.note.as_deref(), Some("travel/japan"));
+        assert_eq!(state.manager.topic.as_deref(), Some("travel/japan"));
     }
 
     #[test]
     fn esc_closes_the_picker_without_opening() {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.on_key(press(KeyCode::Char('/')));
         type_text(&mut state, "jap");
         assert_eq!(state.on_key(press(KeyCode::Esc)), None);
         assert!(state.picker.is_none());
-        assert_eq!(state.manager.note.as_deref(), Some("projects/todo/main"));
+        assert_eq!(state.manager.topic.as_deref(), Some("projects/todo/main"));
     }
 
     #[test]
     fn custom_keys_move_and_enter_toggles() {
-        let mut state = with_notes();
+        let mut state = with_topics();
         state.keys = Keys {
             up: 'i',
             down: 'e',

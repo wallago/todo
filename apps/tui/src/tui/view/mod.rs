@@ -23,7 +23,7 @@ mod dashboard;
 mod form;
 /// The manager page.
 mod manager;
-/// The note finder popup.
+/// The topic finder popup.
 mod picker;
 /// The stats page.
 mod stats;
@@ -143,7 +143,7 @@ fn marks(todo: &todo_client::Todo) -> Vec<Span<'static>> {
     spans
 }
 
-/// Page navigation on top, how much of the open note is done below.
+/// Page navigation on top, how much of the open topic is done below.
 fn render_sidebar(state: &State, frame: &mut Frame, rect: Rect) {
     let [navigate, summary] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(rect);
@@ -178,9 +178,9 @@ fn render_sidebar(state: &State, frame: &mut Frame, rect: Rect) {
     frame.render_widget(gauge, bar);
 }
 
-/// `done / total`, 0 for an empty note.
+/// `done / total`, 0 for an empty topic.
 fn ratio(done: usize, total: usize) -> f64 {
-    #[expect(clippy::cast_precision_loss, reason = "a note's todos fit in an f64")]
+    #[expect(clippy::cast_precision_loss, reason = "a topic's todos fit in an f64")]
     let ratio = if total == 0 {
         0.0
     } else {
@@ -251,7 +251,7 @@ mod tests {
     use todo_client::{Id, Status, Todo};
 
     use super::*;
-    use crate::tui::state::{Action, Loaded, NoteStats};
+    use crate::tui::state::{Action, Loaded, TopicStats};
 
     /// Draws `state` on an 80×24 screen and returns its text, row after row.
     fn screen(state: &mut State) -> String {
@@ -276,13 +276,13 @@ mod tests {
         todo
     }
 
-    /// A state with two notes, the first open with two todos.
+    /// A state with two topics, the first open with two todos.
     fn with_todos() -> State {
         let mut state = State {
             page: Page::Manager,
             ..State::default()
         };
-        state.set_notes(vec!["projects/todo".into(), "travel".into()]);
+        state.set_topics(vec!["projects/todo".into(), "travel".into()]);
         state.manager.set_todos(vec![
             todo("a", "write the tui", Status::Todo),
             todo("b", "auth", Status::Done),
@@ -291,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn manager_shows_the_note_its_todos_and_keys() {
+    fn manager_shows_the_topic_its_todos_and_keys() {
         let screen = screen(&mut with_todos());
         assert!(screen.contains(env!("CARGO_PKG_NAME")));
         assert!(screen.contains("manager"));
@@ -308,7 +308,7 @@ mod tests {
         state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         state.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         let screen = screen(&mut state);
-        assert!(screen.contains("find note"));
+        assert!(screen.contains("find topic"));
         assert!(screen.contains("> t"));
         assert!(screen.contains("travel"));
     }
@@ -359,10 +359,10 @@ mod tests {
     }
 
     #[test]
-    fn picker_shows_when_each_note_is_due() {
+    fn picker_shows_when_each_topic_is_due() {
         let mut state = with_todos();
-        state.stats = vec![NoteStats {
-            note: "travel".into(),
+        state.stats = vec![TopicStats {
+            topic: "travel".into(),
             done: 0,
             total: 1,
             next_due: Some(chrono::Local::now().date_naive()),
@@ -375,21 +375,21 @@ mod tests {
     }
 
     #[test]
-    fn picker_offers_a_new_note_when_nothing_matches() {
+    fn picker_offers_a_new_topic_when_nothing_matches() {
         let mut state = with_todos();
         state.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
         for c in "zz/new".chars() {
             state.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
-        assert!(screen(&mut state).contains("+ new note zz/new"));
+        assert!(screen(&mut state).contains("+ new topic zz/new"));
     }
 
     #[test]
-    fn stats_shows_each_note() {
+    fn stats_shows_each_topic() {
         let mut state = State {
             page: Page::Stats,
-            stats: vec![NoteStats {
-                note: "travel".into(),
+            stats: vec![TopicStats {
+                topic: "travel".into(),
                 done: 1,
                 total: 4,
                 next_due: None,
@@ -411,8 +411,8 @@ mod tests {
         let loading = screen(&mut state);
         assert!(loading.contains("loading…"));
         assert!(loading.contains(&format!("stats {}", SPINNER[0])));
-        let row = NoteStats {
-            note: "travel".into(),
+        let row = TopicStats {
+            topic: "travel".into(),
             done: 1,
             total: 4,
             next_due: None,

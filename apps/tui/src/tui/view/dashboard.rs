@@ -78,7 +78,7 @@ fn tile(label: &str, value: Span<'_>, frame: &mut Frame, rect: Rect) {
     frame.render_widget(text, rect);
 }
 
-/// `2026-11-11  text ⏫   note`, the date coloured by [`due_style`];
+/// `2026-11-11  text ⏫   topic`, the date coloured by [`due_style`];
 /// `📌` in the date column when pinned with no date.
 fn row(due: &DueTodo, today: NaiveDate, width: usize) -> Line<'_> {
     let todo = &due.todo;
@@ -95,7 +95,7 @@ fn row(due: &DueTodo, today: NaiveDate, width: usize) -> Line<'_> {
     let pad = width.saturating_sub(label.width());
     spans.extend(label.spans);
     spans.push(Span::raw(" ".repeat(pad)));
-    spans.push(Span::styled(format!("  {}", due.note), SECONDARY));
+    spans.push(Span::styled(format!("  {}", due.topic), SECONDARY));
     Line::from(spans)
 }
 

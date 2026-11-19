@@ -1,4 +1,4 @@
-//! The note finder popup.
+//! The topic finder popup.
 
 use nucleo_matcher::{
     Config, Matcher,
@@ -12,24 +12,24 @@ use ratatui::{
 use super::manager::step;
 use crate::config::Keys;
 
-/// A query, and the notes it fuzzy-matches, best first.
+/// A query, and the topics it fuzzy-matches, best first.
 #[derive(Debug)]
 pub(in crate::tui) struct Picker {
-    /// Every note, to filter.
-    notes: Vec<String>,
+    /// Every topic, to filter.
+    topics: Vec<String>,
     /// What was typed.
     pub(in crate::tui) query: String,
-    /// Notes matching [`Self::query`], best first.
+    /// Topics matching [`Self::query`], best first.
     pub(in crate::tui) matches: Vec<String>,
     /// Selected row of [`Self::matches`].
     pub(in crate::tui) list: ListState,
 }
 
 impl Picker {
-    /// A picker over `notes`, all of them shown.
-    pub(in crate::tui) fn new(notes: Vec<String>) -> Self {
+    /// A picker over `topics`, all of them shown.
+    pub(in crate::tui) fn new(topics: Vec<String>) -> Self {
         let mut picker = Self {
-            notes,
+            topics,
             query: String::new(),
             matches: Vec::new(),
             list: ListState::default(),
@@ -38,7 +38,7 @@ impl Picker {
         picker
     }
 
-    /// The selected note, if anything matches.
+    /// The selected topic, if anything matches.
     pub(in crate::tui) fn selected(&self) -> Option<&str> {
         self.list
             .selected()
@@ -46,22 +46,22 @@ impl Picker {
             .map(String::as_str)
     }
 
-    /// The note to open: the selected match, or with none, the typed
-    /// path as a new note.
+    /// The topic to open: the selected match, or with none, the typed
+    /// path as a new topic.
     pub(in crate::tui) fn choice(&self) -> Option<String> {
-        if let Some(note) = self.selected() {
-            return Some(note.to_owned());
+        if let Some(topic) = self.selected() {
+            return Some(topic.to_owned());
         }
-        self.new_note()
+        self.new_topic()
     }
 
-    /// The typed path as a note, when nothing matches it.
-    pub(in crate::tui) fn new_note(&self) -> Option<String> {
+    /// The typed path as a topic, when nothing matches it.
+    pub(in crate::tui) fn new_topic(&self) -> Option<String> {
         let path = self.query.trim().trim_matches('/');
         if !self.matches.is_empty() || path.is_empty() {
             return None;
         }
-        // Old habit: `travel/norway.md` is the note `travel/norway`.
+        // Old habit: `travel/norway.md` is the topic `travel/norway`.
         Some(path.strip_suffix(".md").unwrap_or(path).to_owned())
     }
 
@@ -99,9 +99,9 @@ impl Picker {
         let mut matcher = Matcher::new(config);
         let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
         self.matches = pattern
-            .match_list(&self.notes, &mut matcher)
+            .match_list(&self.topics, &mut matcher)
             .into_iter()
-            .map(|(note, _)| note.clone())
+            .map(|(topic, _)| topic.clone())
             .collect();
         self.list.select((!self.matches.is_empty()).then_some(0));
     }
@@ -157,9 +157,9 @@ mod tests {
     }
 
     #[test]
-    fn unmatched_query_is_a_new_note() {
+    fn unmatched_query_is_a_new_topic() {
         let mut picker = Picker::new(vec!["todo".into()]);
-        assert_eq!(picker.new_note(), None);
+        assert_eq!(picker.new_topic(), None);
         type_text(&mut picker, "travel/norway");
         assert_eq!(picker.choice().as_deref(), Some("travel/norway"));
         type_text(&mut picker, ".md");

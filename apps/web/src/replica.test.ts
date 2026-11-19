@@ -17,7 +17,7 @@ function body(text: string, id = text): NewTodo {
   return {
     id,
     text,
-    note: "errands",
+    topic: "errands",
     priority: "normal",
     due: null,
     tags: [],
@@ -31,12 +31,12 @@ function todo(id: string, text = id): Todo {
 }
 
 describe("local changes", () => {
-  test("an add shows at once, in its note, and is queued", () => {
+  test("an add shows at once, in its topic, and is queued", () => {
     const replica = addTodo(emptyReplica(), body("milk"), "todo", TODAY);
     expect(replica.todos).toEqual([
-      { note: "errands", todo: expect.objectContaining({ id: "milk", text: "milk" }) },
+      { topic: "errands", todo: expect.objectContaining({ id: "milk", text: "milk" }) },
     ]);
-    expect(replica.notes).toEqual(["errands"]);
+    expect(replica.topics).toEqual(["errands"]);
     expect(replica.outbox).toEqual([{ seq: 0, op: { kind: "add", body: body("milk") } }]);
   });
 
@@ -75,41 +75,41 @@ describe("sync", () => {
       emptyReplica(),
       {
         cursor: 2,
-        notes: [{ name: "home" }, { name: "errands" }],
+        topics: [{ name: "home" }, { name: "errands" }],
         todos: [
-          { ...todo("a"), note: "errands" },
-          { ...todo("b"), note: "home" },
+          { ...todo("a"), topic: "errands" },
+          { ...todo("b"), topic: "home" },
         ],
       },
       0,
     );
-    expect(replica.notes).toEqual(["errands", "home"]);
+    expect(replica.topics).toEqual(["errands", "home"]);
     expect(since(replica)).toBe(2);
     replica = merge(
       replica,
       {
         cursor: 3,
-        notes: [{ name: "home", deleted: true }],
+        topics: [{ name: "home", deleted: true }],
         todos: [
-          { ...todo("b"), note: "home", deleted: true },
-          { ...todo("a", "eggs"), note: "errands" },
+          { ...todo("b"), topic: "home", deleted: true },
+          { ...todo("a", "eggs"), topic: "errands" },
         ],
       },
       2,
     );
-    expect(replica.todos).toEqual([{ note: "errands", todo: todo("a", "eggs") }]);
-    expect(replica.notes).toEqual(["errands"]);
+    expect(replica.todos).toEqual([{ topic: "errands", todo: todo("a", "eggs") }]);
+    expect(replica.topics).toEqual(["errands"]);
   });
 
   test("a todo with a queued change keeps its local version", () => {
     const local = addTodo(emptyReplica(), body("milk"), "todo", TODAY);
     const replica = merge(
       local,
-      { cursor: 5, todos: [{ ...todo("milk", "stale"), note: "errands" }] },
+      { cursor: 5, todos: [{ ...todo("milk", "stale"), topic: "errands" }] },
       0,
     );
     expect(replica.todos.map((e) => e.todo.text)).toEqual(["milk"]);
-    expect(replica.notes).toEqual(["errands"]);
+    expect(replica.topics).toEqual(["errands"]);
   });
 
   test("a refused change is undone by the next full sync", () => {
@@ -119,7 +119,7 @@ describe("sync", () => {
     expect(since(replica)).toBe(0);
     replica = merge(replica, { cursor: 4 }, 0);
     expect(replica.todos).toEqual([]);
-    expect(replica.notes).toEqual([]);
+    expect(replica.topics).toEqual([]);
     expect(since(replica)).toBe(4);
   });
 });
@@ -128,6 +128,17 @@ describe("saved copy", () => {
   test("reads back what was saved", () => {
     const replica = addTodo(emptyReplica(), body("milk"), "todo", TODAY);
     expect(parseReplica(JSON.stringify(replica))).toEqual(replica);
+  });
+
+  test("a copy from before topics keeps its outbox and fetches the rest", () => {
+    const { outbox, nextSeq } = addTodo(emptyReplica(), body("milk"), "todo", TODAY);
+    const old = { cursor: 7, resync: false, notes: ["a"], todos: [{ note: "a" }], outbox, nextSeq };
+    expect(parseReplica(JSON.stringify(old))).toEqual({
+      ...emptyReplica(),
+      outbox,
+      nextSeq,
+      resync: true,
+    });
   });
 
   test("starts empty when there is none or it's unreadable", () => {
