@@ -12,4 +12,5 @@ extend-exclude = [
   "CHANGELOG.md",
   # Sample Obsidian note: test data, not prose
   "vault",
+  "pnpm-lock.yaml",
 ]

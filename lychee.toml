@@ -8,4 +8,6 @@ exclude_path = [
   ".direnv",
   # Sample Obsidian note: test data
   "vault",
+  "node_modules",
+  "dist",
 ]

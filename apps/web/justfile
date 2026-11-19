@@ -1,0 +1,14 @@
+import 'just/web.just'
+
+# List all commands
+default:
+    @just --list
+
+# Run every check before pushing
+[group('ci')]
+ci:
+    @just fmt-check
+    @just lint
+    @just check
+    @just test
+    @just build

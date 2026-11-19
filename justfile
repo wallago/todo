@@ -10,6 +10,7 @@ import 'just/github.just'
 import 'just/crates.just'
 mod server 'apps/server'
 mod tui 'apps/tui'
+mod web 'apps/web'
 
 # List all commands
 default:
@@ -29,3 +30,4 @@ ci:
     @just crates
     @just server::ci
     @just tui::ci
+    @just web::ci

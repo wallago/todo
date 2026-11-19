@@ -8,7 +8,8 @@ todo/
 ├── justfile              # `just ci`: repo-wide checks, then each app's own
 ├── apps/                 # one folder per app, each with its own justfile
 │   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the database
-│   └── tui/              # ratatui client, works offline
+│   ├── tui/              # ratatui client, works offline
+│   └── web/              # React web app (PWA) served by the server at /, works offline
 ├── crates/               # libraries the apps share (`just crates` checks them)
 │   ├── core/             # Todo struct, state machine, no I/O
 │   ├── md/               # read-only Obsidian Tasks parser, for `todo-server import`
@@ -20,6 +21,7 @@ todo/
 ```
 todo.db (SQLite)  <-->  server  <--HTTP-->  tui
                           ^
+                          +---HTTP--> web app (phone, browser)
                           +---HTTP--> desk display / phone widget
                           +---HTTP /mcp--> Claude
 ```
@@ -38,7 +40,8 @@ todo.db (SQLite)  <-->  server  <--HTTP-->  tui
 `just ci` is the gate, and CI runs each of its recipes as a job in the flake's CI shell
 (`nix develop .#ci`): Nix lint, unused deps, `cargo deny`, `cargo audit`, editorconfig,
 typos, Markdown links, workflow lint, then format, TOML format, clippy `-D warnings`,
-tests and docs for `crates/` and each app. Commits are checked as Conventional Commits.
+tests and docs for `crates/` and each app (for `apps/web`: biome, `tsc`, vitest and the Vite build).
+Commits are checked as Conventional Commits.
 
 ### Database
 
@@ -70,6 +73,13 @@ The TUI works offline: it keeps a copy of every todo in `~/.local/share/todo-tui
 pulls `/api/sync` after each change, every 30 s and on `r`. The title bar shows `offline · 3 to send`
 until it gets through. A change the server refuses (a todo deleted elsewhere, say) is dropped, shown as
 `refused: ...`, and undone by a full resync. Ticking a recurring todo offline: its next one appears once synced.
+
+The web app (`apps/web`) does the same in the browser: the copy and its queue live in `localStorage`,
+and a service worker keeps the app itself, so it opens with no network. Install it from the browser
+menu ("Add to home screen") to get it as an app on a phone. It asks for the server token once.
+todo-server serves it at `/` when `[web] dir` points at the build (`just web::build` writes
+`apps/web/dist`; the NixOS module sets it to the `web` package). The page itself needs no token;
+its API calls do.
 
 ### Import from Obsidian
 
