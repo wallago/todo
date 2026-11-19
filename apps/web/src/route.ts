@@ -11,7 +11,7 @@ export type Route =
 export const TABS = [
   { page: "due", href: "#/", label: "Due" },
   { page: "pinned", href: "#/pinned", label: "Pinned" },
-  { page: "notes", href: "#/notes", label: "Notes" },
+  { page: "notes", href: "#/notes", label: "Topics" },
 ] as const;
 
 /** Reads `#/`, `#/pinned`, `#/notes` or `#/note/<name>`. */

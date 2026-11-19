@@ -84,7 +84,7 @@ describe("App", () => {
     expect(await screen.findByText("water plants")).toBeDefined();
   });
 
-  test("swiping moves between Due, Pinned and Notes", async () => {
+  test("swiping moves between Due, Pinned and Topics", async () => {
     const store = new Store(
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
       offline,
@@ -99,8 +99,8 @@ describe("App", () => {
       );
     };
     await swipe(300, 100, "Pinned");
-    await swipe(300, 100, "Notes");
-    await swipe(300, 100, "Notes");
+    await swipe(300, 100, "Topics");
+    await swipe(300, 100, "Topics");
     await swipe(100, 300, "Pinned");
     await swipe(200, 220, "Pinned");
     await swipe(100, 300, "Due");

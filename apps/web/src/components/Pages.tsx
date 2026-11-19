@@ -63,7 +63,7 @@ export function PinnedPage({ todos, ...list }: PageProps) {
 
 /** Every note, with how many todos are still open in it. */
 export function NotesPage({ notes, todos }: { notes: string[]; todos: Entry[] }) {
-  if (notes.length === 0) return <p className="empty">No notes yet.</p>;
+  if (notes.length === 0) return <p className="empty">No topics yet.</p>;
   return (
     <ul>
       {notes.map((note) => {
