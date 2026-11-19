@@ -28,7 +28,7 @@ function TodoList({ entries, showNote, onToggle, onOpen }: ListProps) {
 
 type PageProps = Omit<ListProps, "entries" | "showNote"> & { todos: Entry[] };
 
-/** Late, today, this week, then pinned: every open todo that needs a look. */
+/** Late, today, then this week: every open todo due by Sunday. */
 export function DuePage({ todos, ...list }: PageProps) {
   const today = isoDate();
   const sunday = endOfWeek();
@@ -37,7 +37,6 @@ export function DuePage({ todos, ...list }: PageProps) {
     ["Late", open.filter((e) => e.todo.due && e.todo.due < today)],
     ["Today", open.filter((e) => e.todo.due === today)],
     ["This week", open.filter((e) => e.todo.due && e.todo.due > today && e.todo.due <= sunday)],
-    ["Pinned", open.filter((e) => e.todo.pinned && !(e.todo.due && e.todo.due <= sunday))],
   ];
   const shown = sections.filter(([, entries]) => entries.length > 0);
   if (shown.length === 0) {
@@ -53,9 +52,18 @@ export function DuePage({ todos, ...list }: PageProps) {
   ));
 }
 
+/** Every open pinned todo, across notes. */
+export function PinnedPage({ todos, ...list }: PageProps) {
+  const pinned = todos
+    .filter((e) => e.todo.pinned && !isClosed(e.todo))
+    .sort((a, b) => byUrgency(a.todo, b.todo));
+  if (pinned.length === 0) return <p className="empty">Nothing pinned.</p>;
+  return <TodoList entries={pinned} showNote {...list} />;
+}
+
 /** Every note, with how many todos are still open in it. */
 export function NotesPage({ notes, todos }: { notes: string[]; todos: Entry[] }) {
-  if (notes.length === 0) return <p className="empty">No notes yet.</p>;
+  if (notes.length === 0) return <p className="empty">No topics yet.</p>;
   return (
     <ul>
       {notes.map((note) => {

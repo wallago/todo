@@ -112,7 +112,7 @@ export function TodoForm({ entry, note, notes, onSave, onDelete, onClose }: Prop
           />
         </label>
         <label>
-          Note
+          Topic
           <input
             required
             list={list}
