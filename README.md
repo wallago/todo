@@ -4,50 +4,96 @@
 
 ```
 todo/
-├── Cargo.toml            # [workspace] members = ["crates/*"]
-├── crates/
+├── Cargo.toml            # [workspace] members = apps/server, apps/tui, crates/*
+├── justfile              # `just ci`: repo-wide checks, then each app's own
+├── apps/                 # one folder per app, each with its own justfile
+│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the database
+│   ├── tui/              # ratatui client, works offline
+│   └── web/              # React web app (PWA) served by the server at /, works offline
+├── crates/               # libraries the apps share (`just crates` checks them)
 │   ├── core/             # Todo struct, state machine, no I/O
-│   ├── md/               # parser + serializer (md <-> core)
-│   ├── store/            # file watching, read/write vault, index
-│   ├── server/           # axum HTTP API + MCP at /mcp — sole owner of the vault
-│   ├── client/           # wire types + request fns (shared by tui/desk)
-│   └── tui/              # ratatui client
-└── vault/                # test fixtures, sample .md
+│   ├── md/               # read-only Obsidian Tasks parser, for `todo-server import`
+│   ├── store/            # SQLite database: topics, todos, vault import
+│   └── client/           # wire types + request fns (shared by tui/desk)
+└── vault/                # sample Obsidian note, md parser test fixture
 ```
 
 ```
-vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
-                                           ^
-                                           +---HTTP--> desk display
-                                           +---HTTP /mcp--> Claude
+todo.db (SQLite)  <-->  server  <--HTTP-->  tui
+                          ^
+                          +---HTTP--> web app (phone, browser)
+                          +---HTTP--> desk display / phone widget
+                          +---HTTP /mcp--> Claude
 ```
 
 ### Keys
 
 - `core` has zero dependencies on I/O.
   Everything else depends on it.
-  This is the part that keeps the workspace from rotting.
-- Keep `md` separate from `store`.
-  The parser should be a pure `&str -> Vec<Todo> + Vec<Todo> -> String`, which makes it trivially testable and round-trippable.
-  Round-trip tests matter a lot here: a parser that loses a stray comment or reorders lines will eventually corrupt an Obsidian note you care about.
-  Write `parse(write(parse(s))) == parse(s)` as a property test early.
-- Markdown format: Obsidian Tasks plugin convention as target: `- [ ] buy milk 📅 2026-10-30 #errand` with stable id — `^abc123`.
-- MCP: use the official `rmcp` crate.
-  Expose maybe 5 tools: `list_todos`, `add_todo`, `complete_todo`, `update_todo`, `search`.
-  Resist exposing a generic "edit file" tool — the whole point is that the parser enforces format validity.
-- `server` is the only process that touches the vault.
+- `server` is the only process that opens the database.
   `store` is server-internal; the MCP tools live in the server and call the same code as the routes.
-  Two independent readers/writers means torn reads mid-write and lost updates when Obsidian saves at the same time.
 - `client` holds the wire format once.
   The server and `tui` both depend on it, so the API types can't drift between consumers.
-- The file watcher reloads the whole vault once it has been quiet for 500 ms, so sync bursts cost one reload.
-  The server's own writes wake it too, which is harmless: the store keeps no state beyond the files, and every write re-reads its note first.
-- Incoming Syncthing/Obsidian Sync changes are just external edits.
-  Same code path as editing the vault in Obsidian on another device.
+
+### Checks
+
+`just ci` is the gate, and CI runs each of its recipes as a job in the flake's CI shell
+(`nix develop .#ci`): Nix lint, unused deps, `cargo deny`, `cargo audit`, editorconfig,
+typos, Markdown links, workflow lint, then format, TOML format, clippy `-D warnings`,
+tests and docs for `crates/` and each app (for `apps/web`: biome, `tsc`, vitest and the Vite build).
+Commits are checked as Conventional Commits.
+
+### Database
+
+One SQLite file (`[database] path`, created on first start), migrated with `PRAGMA user_version`.
+
+- `topics`: `id` (UUID), `name` (unique, like `projects/todo/main`), `created_at`, `updated_at`, `deleted_at`.
+- `todos`: `id`, `topic_id`, `text`, `status`, `priority`, `due`, `done`, `tags` (JSON list),
+  `pinned`, `recur` (JSON, like `{"every": 2, "unit": "week"}`), `created_at`, `updated_at`, `deleted_at`.
+- Pinned: being worked on, usually with no due date; listed first in the TUI.
+- Recurring: completing one adds the next, due one interval after its due date (or after today).
+  The done one stops recurring, so reopening it can't add a second copy.
+- New ids are UUIDv7 (or the client's own UUID); todos imported from Obsidian keep their `^abc123` block id.
+- Topic names are `/`-separated paths without `.md`, like `projects/todo/main`; a trailing `.md` sent by a client is dropped.
+- Deleting only sets `deleted_at`, so offline clients can sync it later. Ids are never reused.
+- Timestamps are RFC 3339 UTC text, so they sort as text.
+
+### Sync (offline clients)
+
+- Every insert or change takes the next number of one counter (`sync_counter`, bumped by triggers) into the row's `version`.
+  No clocks involved, so a device with a wrong clock can't lose changes.
+- `GET /api/sync?since=N` answers every topic and todo with `version > N`, deleted ones too (`"deleted": true`),
+  and the `cursor` to send next time. `since=0` is the full snapshot.
+- Offline writes replay the normal routes. `POST /api/todos` takes a client-made UUID `id`: sending it twice answers
+  the saved todo (200) instead of a copy. `DELETE` of a deleted todo answers 204. `complete` was already safe to retry.
+- Conflicts: the last write the server receives wins. Fine for one person.
+
+The TUI works offline: it keeps a copy of every todo in `~/.local/share/todo-tui/replica.json`
+(one server at a time), and queues each add, edit, tick and delete there. It sends the queue then
+pulls `/api/sync` after each change, every 30 s and on `r`. The title bar shows `offline · 3 to send`
+until it gets through. A change the server refuses (a todo deleted elsewhere, say) is dropped, shown as
+`refused: ...`, and undone by a full resync. Ticking a recurring todo offline: its next one appears once synced.
+
+The web app (`apps/web`) does the same in the browser: the copy and its queue live in `localStorage`,
+and a service worker keeps the app itself, so it opens with no network. Install it from the browser
+menu ("Add to home screen") to get it as an app on a phone. It asks for the server token once.
+todo-server serves it at `/` when `[web] dir` points at the build (`just web::build` writes
+`apps/web/dist`; the NixOS module sets it to the `web` package). The page itself needs no token;
+its API calls do.
+
+### Import from Obsidian
+
+Once, to move an old vault in (never writes to the vault; safe to run again, known ids are skipped):
+
+```sh
+todo-server --config config.toml import ~/vault
+# or straight at the file:
+todo-server import ~/vault --db /var/lib/todo/todo.db
+```
 
 ### Deployment
 
-- Server runs on the always-on box that holds the vault, as a systemd user service.
+- Server runs on the always-on box that holds the database, as a systemd service.
 - Static bearer token on the API, kept in a config file.
   Ten lines of work, and it means exposing over Tailscale later needs no redesign.
   Never bind `0.0.0.0` without it.
@@ -63,15 +109,6 @@ vault/*.md  <--(watch + read/write)-->  server  <--HTTP-->  tui
   Substantially less work than microcontroller firmware.
 - Read-only by default — skips a lot of conflict handling.
   If ticking off from the device is wanted: `POST /api/todos/:id/complete`, idempotent, because the device will retry on flaky wifi.
-
-### Build order
-
-1. `core` + `md` with round-trip tests
-2. `store`
-3. `server` + `client`
-4. `tui` — the thing used daily
-5. `mcp`
-6. desk display endpoint
 
 ## MCP
 

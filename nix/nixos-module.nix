@@ -10,13 +10,17 @@ let
   settingsFormat = pkgs.formats.toml { };
   # systemd copies the token here (LoadCredential), readable by the service only.
   credentials = "/run/credentials/todo-server.service";
-  settings = lib.recursiveUpdate cfg.server.settings {
+  # Default database in the service's StateDirectory.
+  defaultDb = "/var/lib/todo/todo.db";
+  dbPath = cfg.server.settings.database.path or defaultDb;
+  settings = lib.recursiveUpdate (lib.recursiveUpdate { database.path = defaultDb; } cfg.server.settings) {
     server =
       lib.optionalAttrs (cfg.server.tokenFile != null) { token_file = "${credentials}/token"; }
       // lib.optionalAttrs (cfg.server.readTokenFile != null) {
         read_token_file = "${credentials}/read-token";
       };
-  };
+  }
+  // lib.optionalAttrs (cfg.server.web != null) { web.dir = "${cfg.server.web}"; };
   configFile = settingsFormat.generate "todo-server.toml" settings;
   vFlag = n: lib.optionalString (n > 0) "-${lib.concatStrings (lib.replicate n "v")}";
   serverPort = cfg.server.settings.server.port or 3000;
@@ -50,22 +54,19 @@ in
       user = lib.mkOption {
         type = lib.types.str;
         default = "todo";
-        description = "User the server runs as. Needs write access to the vault.";
+        description = "User the server runs as. Owns the database.";
       };
       group = lib.mkOption {
         type = lib.types.str;
         default = "todo";
       };
       settings = lib.mkOption {
-        type = settingsFormat.type;
+        inherit (settingsFormat) type;
         example = {
           server.port = 3000;
           # Public HTTPS URL: turns on OAuth for claude.ai connectors (needs tokenFile).
           server.publicUrl = "https://todo.wallago.xyz";
-          vault = {
-            root = "/srv/vault";
-            inbox = "todo.md";
-          };
+          database.path = "/var/lib/todo/todo.db";
           # Host names MCP clients use for /mcp.
           mcp.allowedHosts = [
             "localhost"
@@ -75,8 +76,9 @@ in
           ];
         };
         description = ''
-          Written to config.toml. `vault.root` must be absolute:
-          a relative path would resolve inside the Nix store.
+          Written to config.toml. `database.path` defaults to
+          /var/lib/todo/todo.db; if set, it must be absolute: a relative path
+          would resolve inside the Nix store.
         '';
       };
       tokenFile = lib.mkOption {
@@ -87,6 +89,15 @@ in
           File holding the bearer token for /api and /mcp, e.g. an agenix or
           sops-nix secret. It can stay root-only. A string, not a Nix path,
           so the token stays out of the Nix store. null: no auth.
+        '';
+      };
+      web = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.web;
+        defaultText = lib.literalExpression "todo.packages.\${system}.web";
+        description = ''
+          The built web app, served at / (an offline copy of the todo list
+          for phones and browsers). null: no web app.
         '';
       };
       readTokenFile = lib.mkOption {
@@ -113,8 +124,8 @@ in
     (lib.mkIf cfg.server.enable {
       assertions = [
         {
-          assertion = lib.hasPrefix "/" (cfg.server.settings.vault.root or "");
-          message = "services.todo.server.settings.vault.root must be an absolute path.";
+          assertion = lib.hasPrefix "/" dbPath;
+          message = "services.todo.server.settings.database.path must be an absolute path.";
         }
         {
           assertion = cfg.server.readTokenFile == null || cfg.server.tokenFile != null;
@@ -140,9 +151,11 @@ in
             ExecStart = "${lib.getExe' cfg.package "todo-server"} --config ${configFile} ${vFlag cfg.server.verbose}";
             User = cfg.server.user;
             Group = cfg.server.group;
-            # Notes it writes stay group-writable for the vault's other users.
-            UMask = "0007";
-            ReadWritePaths = [ cfg.server.settings.vault.root ];
+            UMask = "0077";
+            # /var/lib/todo, owned by the service user.
+            StateDirectory = "todo";
+            StateDirectoryMode = "0700";
+            ReadWritePaths = [ (dirOf dbPath) ];
           }
           // {
             LoadCredential =

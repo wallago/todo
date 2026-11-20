@@ -1,11 +1,11 @@
 //! Request functions: one per server route.
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
-use crate::{ErrorBody, Id, NewTodo, Todo, TodoPatch, TodoQuery};
+use crate::{Changes, ErrorBody, Id, NewTodo, SyncQuery, Todo, TodoPatch, TodoQuery};
 
 /// What can go wrong when calling the server.
 #[derive(Debug, thiserror::Error)]
@@ -28,6 +28,21 @@ impl Error {
     #[must_use]
     pub fn is_not_found(&self) -> bool {
         matches!(self, Self::Api { status, .. } if *status == StatusCode::NOT_FOUND)
+    }
+
+    /// `true` if the server refused the request itself, so sending it
+    /// again won't help: a 4xx other than a missing or wrong token, or
+    /// "try later". Anything else (down, timeout, 5xx) may pass next time.
+    #[must_use]
+    pub fn is_refused(&self) -> bool {
+        matches!(self, Self::Api { status, .. } if status.is_client_error()
+            && ![
+                StatusCode::UNAUTHORIZED,
+                StatusCode::FORBIDDEN,
+                StatusCode::REQUEST_TIMEOUT,
+                StatusCode::TOO_MANY_REQUESTS,
+            ]
+            .contains(status))
     }
 }
 
@@ -62,7 +77,12 @@ impl Client {
     #[must_use]
     pub fn new(base: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // Bounded, so an offline client finds out quickly.
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(15))
+                .build()
+                .unwrap_or_default(),
             base: base.trim_end_matches('/').to_owned(),
             token: None,
         }
@@ -80,17 +100,27 @@ impl Client {
         send(self.request(Method::GET, None)).await
     }
 
-    /// The todos of one note, like `travel/japan.md`.
-    pub async fn list_note(&self, note: &str) -> Result<Vec<Todo>> {
+    /// The todos of one topic, like `travel/japan`.
+    pub async fn list_topic(&self, topic: &str) -> Result<Vec<Todo>> {
         let query = TodoQuery {
-            note: Some(note.to_owned()),
+            topic: Some(topic.to_owned()),
         };
         send(self.request(Method::GET, None).query(&query)).await
     }
 
-    /// Every note's path, relative to the vault.
-    pub async fn notes(&self) -> Result<Vec<String>> {
-        send(self.call(Method::GET, "/api/notes")).await
+    /// Every topic's name, like `projects/dev`.
+    pub async fn topics(&self) -> Result<Vec<String>> {
+        send(self.call(Method::GET, "/api/topics")).await
+    }
+
+    /// Every topic and todo changed since `since`, deleted ones included.
+    /// Pass 0 the first time, then the `cursor` of the last answer.
+    pub async fn sync(&self, since: u64) -> Result<Changes> {
+        send(
+            self.call(Method::GET, "/api/sync")
+                .query(&SyncQuery { since }),
+        )
+        .await
     }
 
     /// One todo.
@@ -98,7 +128,7 @@ impl Client {
         send(self.request(Method::GET, Some(id))).await
     }
 
-    /// Adds a todo to the inbox note, or to `new.note`. Returns it with its
+    /// Adds a todo to `new.topic`. Returns it with its
     /// new id.
     pub async fn add(&self, new: &NewTodo) -> Result<Todo> {
         send(self.request(Method::POST, None).json(new)).await
@@ -114,7 +144,7 @@ impl Client {
         send(self.call(Method::POST, &format!("/api/todos/{}/complete", id.0))).await
     }
 
-    /// Removes a todo and its line.
+    /// Removes a todo. Removing one already removed is fine.
     pub async fn remove(&self, id: &Id) -> Result<()> {
         check(self.request(Method::DELETE, Some(id)).send().await?).await?;
         Ok(())

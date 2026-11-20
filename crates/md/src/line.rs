@@ -1,7 +1,7 @@
 //! One task line: `- [ ] text ⏫ ➕ 2026-10-24 📅 2026-10-30 #tag ^id`.
 
 use chrono::NaiveDate;
-use todo_core::{Id, Priority, Status, Todo};
+use todo_core::{Id, Priority, Recur, Status, Todo, Unit};
 
 /// Date format used by the Tasks plugin.
 const DATE: &str = "%Y-%m-%d";
@@ -26,32 +26,6 @@ pub fn parse_line(line: &str) -> Option<(&str, Todo)> {
         return None;
     }
     Some((prefix, parse_body(Status::from_char(mark), body)))
-}
-
-/// Writes a todo as a task line, after `prefix` (use `"- "` for a new task).
-#[must_use]
-pub fn write_line(prefix: &str, todo: &Todo) -> String {
-    let mut line = format!("{prefix}[{}]", todo.status.as_char());
-    let mut push = |part: &str| {
-        if !part.is_empty() {
-            line.push(' ');
-            line.push_str(part);
-        }
-    };
-    push(&todo.text);
-    push(todo.priority.emoji().unwrap_or_default());
-    for (emoji, date) in [("➕", todo.created), ("📅", todo.due), ("✅", todo.done)] {
-        if let Some(date) = date {
-            push(&format!("{emoji} {date}"));
-        }
-    }
-    for tag in &todo.tags {
-        push(&format!("#{tag}"));
-    }
-    if !todo.id.0.is_empty() {
-        push(&format!("^{}", todo.id.0));
-    }
-    line
 }
 
 /// Strips a list bullet (`-`, `*`, `+`, `1.`, `1)`) and the space after it.
@@ -82,7 +56,16 @@ fn parse_body(status: Status, body: &str) -> Todo {
     let mut priority = None;
     let (mut due, mut created, mut done) = (None, None, None);
     let mut tags = Vec::new();
+    let mut recur = None;
     while let Some((head, word)) = split_last(rest) {
+        if recur.is_none()
+            && let Some((head, found)) = rest.rsplit_once('🔁')
+            && let Some(found) = parse_recur(found)
+        {
+            recur = Some(found);
+            rest = head;
+            continue;
+        }
         if priority.is_none()
             && let Some(p) = priority_from_emoji(word)
         {
@@ -120,7 +103,32 @@ fn parse_body(status: Status, body: &str) -> Todo {
         created,
         done,
         tags,
+        pinned: false,
+        recur,
     }
+}
+
+/// Reads the Tasks plugin's `every week`, `every 2 days`... (after `🔁`).
+/// `when done` is accepted and ignored. Anything else, like `every
+/// Monday`, is `None`, and stays in the text.
+fn parse_recur(src: &str) -> Option<Recur> {
+    let mut words: Vec<&str> = src.split_whitespace().collect();
+    if words.ends_with(&["when", "done"]) {
+        words.truncate(words.len() - 2);
+    }
+    let (every, unit) = match words.as_slice() {
+        ["every", unit] => (1, *unit),
+        ["every", n, unit] => (n.parse().ok().filter(|n| *n > 0)?, *unit),
+        _ => return None,
+    };
+    let unit = match unit.trim_end_matches('s') {
+        "day" => Unit::Day,
+        "week" => Unit::Week,
+        "month" => Unit::Month,
+        "year" => Unit::Year,
+        _ => return None,
+    };
+    Some(Recur { every, unit })
 }
 
 /// Splits off the last whitespace-separated word.
@@ -165,7 +173,6 @@ fn priority_from_emoji(word: &str) -> Option<Priority> {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
 
     use super::*;
 
@@ -182,7 +189,32 @@ mod tests {
         assert_eq!(todo.created, NaiveDate::from_ymd_opt(2026, 10, 22));
         assert_eq!(todo.due, NaiveDate::from_ymd_opt(2026, 10, 25));
         assert_eq!(todo.tags, ["dev", "todo-app"]);
-        assert_eq!(write_line(prefix, &todo), line);
+        Ok(())
+    }
+
+    #[test]
+    fn reads_recurrence() -> Result<(), &'static str> {
+        let (_, todo) =
+            parse_line("- [ ] Water plants 🔁 every 2 weeks when done 📅 2026-11-20 #home ^p1")
+                .ok_or("not a task")?;
+        assert_eq!(todo.text, "Water plants");
+        assert_eq!(
+            todo.recur,
+            Some(Recur {
+                every: 2,
+                unit: Unit::Week
+            })
+        );
+        assert_eq!(todo.due, NaiveDate::from_ymd_opt(2026, 11, 20));
+        assert_eq!(todo.tags, ["home"]);
+        let (_, todo) = parse_line("- [ ] Gym 🔁 every day").ok_or("not a task")?;
+        assert_eq!(todo.recur.map(|r| (r.every, r.unit)), Some((1, Unit::Day)));
+        // Not understood: kept as text.
+        let (_, todo) = parse_line("- [ ] Bins 🔁 every Monday").ok_or("not a task")?;
+        assert_eq!(
+            (todo.text.as_str(), todo.recur),
+            ("Bins 🔁 every Monday", None)
+        );
         Ok(())
     }
 
@@ -205,59 +237,8 @@ mod tests {
     fn numbers_and_hashes_in_text_stay_text() -> Result<(), &'static str> {
         let (_, todo) = parse_line("- [ ] Fix issue #42 by 2026-10-30").ok_or("not a task")?;
         assert_eq!(todo.text, "Fix issue #42 by 2026-10-30");
-        assert!(todo.tags.is_empty());
+        assert_eq!(todo.tags, Vec::<String>::new());
         assert_eq!(todo.due, None);
         Ok(())
-    }
-
-    /// Any todo with ordinary text survives write then parse unchanged.
-    fn arb_todo() -> impl Strategy<Value = Todo> {
-        let status = prop_oneof![
-            Just(Status::Todo),
-            Just(Status::InProgress),
-            Just(Status::Done),
-            Just(Status::Cancelled),
-        ];
-        let priority = prop_oneof![
-            Just(Priority::Lowest),
-            Just(Priority::Low),
-            Just(Priority::Normal),
-            Just(Priority::Medium),
-            Just(Priority::High),
-            Just(Priority::Highest),
-        ];
-        let date = (2000i32..2100, 1u32..=12, 1u32..=28)
-            .prop_map(|(y, m, d)| NaiveDate::from_ymd_opt(y, m, d).unwrap_or_default());
-        (
-            "([a-z0-9]{6})?",
-            "[A-Za-z]([A-Za-z0-9 ,.!?']{0,30}[A-Za-z.!?])?",
-            status,
-            priority,
-            proptest::option::of(date.clone()),
-            proptest::option::of(date.clone()),
-            proptest::option::of(date),
-            proptest::collection::vec("[a-z][a-z0-9/_-]{0,8}", 0..3),
-        )
-            .prop_map(
-                |(id, text, status, priority, due, created, done, tags)| Todo {
-                    id: Id(id),
-                    text,
-                    status,
-                    priority,
-                    due,
-                    created,
-                    done,
-                    tags,
-                },
-            )
-    }
-
-    proptest! {
-        #[test]
-        fn write_then_parse_round_trips(todo in arb_todo(), indent in "[ \t]{0,4}") {
-            let prefix = format!("{indent}- ");
-            let line = write_line(&prefix, &todo);
-            prop_assert_eq!(parse_line(&line), Some((prefix.as_str(), todo)));
-        }
     }
 }

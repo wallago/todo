@@ -1,16 +1,12 @@
-//! Read and write todos in Obsidian markdown notes (Tasks plugin format).
+//! Reads todos from Obsidian markdown notes (Tasks plugin format).
 //!
-//! Pure `&str` in, `String` out: the server owns the files and calls this.
+//! Read-only, `&str` in: only `todo-server import` uses it, to move an old
+//! vault into the database.
 //!
 //! ```
-//! use todo_md::Document;
-//!
-//! let mut doc = Document::parse("# Todo\n\n- [ ] buy milk 📅 2026-10-30 #errand ^k3x9a2\n");
-//! let id = todo_core::Id("k3x9a2".into());
-//! # let today = chrono::NaiveDate::default();
-//! doc.update(&id, |todo| todo.complete(today))?;
-//! assert!(doc.to_string().contains("- [x] buy milk"));
-//! # Ok::<(), todo_md::Error>(())
+//! let todos = todo_md::parse_note("# Todo\n\n- [ ] buy milk 📅 2026-10-30 #errand ^k3x9a2\n");
+//! assert_eq!(todos[0].text, "buy milk");
+//! assert_eq!(todos[0].id.0, "k3x9a2");
 //! ```
 
 /// A whole note.
@@ -18,20 +14,5 @@ mod document;
 /// One task line.
 mod line;
 
-pub use document::Document;
-pub use line::{parse_line, write_line};
-use todo_core::Id;
-
-/// What can go wrong when changing a [`Document`].
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
-    /// No todo has this id.
-    #[error("no todo with id `{}`", .0.0)]
-    NotFound(Id),
-    /// Another todo already has this id.
-    #[error("id `{}` is already used", .0.0)]
-    DuplicateId(Id),
-    /// The todo has an empty id.
-    #[error("todo has no id")]
-    MissingId,
-}
+pub use document::parse_note;
+pub use line::parse_line;

@@ -1,0 +1,98 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  # Every PR, whatever its base: refactor branches gather PRs before main.
+  pull_request:
+  schedule:
+    - cron: "0 0 * * 0"
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  # Every recipe of `just ci`, each in the flake's CI shell: same tools, same
+  # commands as a local run.
+  check:
+    name: just ${{ matrix.recipe }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        recipe:
+          - nix-lint
+          - udeps
+          - deny
+          - audit
+          - editorconfig
+          - typos
+          - links
+          - workflows
+          - crates
+          - server::ci
+          - tui::ci
+          - web::ci
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v7
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v35
+      - name: Restore and cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.recipe }}
+      - name: Cache the pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Run just ${{ matrix.recipe }}
+        run: nix develop .#ci --command just ${{ matrix.recipe }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  nix:
+    name: Nix flake
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v7
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v35
+      - name: Restore and cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - name: Check Nix flake
+        run: nix flake check --print-build-logs --all-systems
+  commits:
+    name: Commit format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v35
+      - name: Restore and cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      # On a PR, every commit of the branch; on main, the pushed one.
+      - name: Run committed
+        run: nix develop .#ci --command just commits "$RANGE"
+        env:
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..HEAD', github.event.pull_request.base.sha) || 'HEAD' }}
