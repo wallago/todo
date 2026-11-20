@@ -28,7 +28,7 @@ mod theme;
 mod view;
 
 use replica::{Op, Replica};
-use state::{Action, Loaded, NoteStats, Page, State, SyncStatus};
+use state::{Action, Loaded, Page, State, SyncStatus, TopicStats};
 
 /// Puts the terminal back however [`run`] ends: quit, error, or another
 /// component stopping first and dropping it mid-loop.
@@ -42,7 +42,7 @@ impl Drop for Restore {
 
 /// How often the spinner turns while something loads.
 const TICK: Duration = Duration::from_millis(100);
-/// How often the notes and the open page reload on their own.
+/// How often the topics and the open page reload on their own.
 const AUTO_REFRESH: Duration = Duration::from_secs(30);
 
 /// What a sync sends back to the event loop: its id and what it loaded.
@@ -142,8 +142,8 @@ impl Link<'_> {
     /// shows no spinner.
     fn spawn(&self, state: &mut State, action: Action, quiet: bool) {
         let job = Job {
-            note: state.manager.note.clone(),
-            notes: state.notes.clone(),
+            topic: state.manager.topic.clone(),
+            topics: state.topics.clone(),
             selected: state.manager.selected().cloned(),
             stats: state.page == Page::Stats || state.picker.is_some(),
             dashboard: state.page == Page::Dashboard,
@@ -185,13 +185,13 @@ impl Link<'_> {
 
 /// What an action needs from the state, copied when it starts.
 struct Job {
-    /// The manager's note.
-    note: Option<String>,
-    /// Every note path.
-    notes: Vec<String>,
+    /// The manager's topic.
+    topic: Option<String>,
+    /// Every topic path.
+    topics: Vec<String>,
     /// The todo under the cursor.
     selected: Option<Todo>,
-    /// Whether the stats page or the note picker is open.
+    /// Whether the stats page or the topic picker is open.
     stats: bool,
     /// Whether the dashboard is open.
     dashboard: bool,
@@ -203,24 +203,24 @@ fn local(replica: &mut Replica, job: &Job, action: Action) -> Vec<Loaded> {
     let mut loaded = Vec::new();
     match action {
         Action::Refresh => {
-            let notes = replica.notes();
-            // With no note open, the manager opens the first one.
-            let note = job.note.clone().or_else(|| notes.first().cloned());
+            let topics = replica.topics();
+            // With no topic open, the manager opens the first one.
+            let topic = job.topic.clone().or_else(|| topics.first().cloned());
             if job.stats {
-                loaded.push(load_stats(replica, &notes));
+                loaded.push(load_stats(replica, &topics));
             }
             if job.dashboard {
-                loaded.push(load_dashboard(replica, &notes));
+                loaded.push(load_dashboard(replica, &topics));
             }
-            loaded.push(Loaded::Notes(notes));
+            loaded.push(Loaded::Topics(topics));
             loaded.push(Loaded::Tags(replica.all()));
-            loaded.extend(load_todos(replica, note));
+            loaded.extend(load_todos(replica, topic));
         }
-        Action::LoadTodos => loaded.extend(load_todos(replica, job.note.clone())),
-        Action::LoadStats => loaded.push(load_stats(replica, &job.notes)),
-        Action::LoadDashboard => loaded.push(load_dashboard(replica, &job.notes)),
+        Action::LoadTodos => loaded.extend(load_todos(replica, job.topic.clone())),
+        Action::LoadStats => loaded.push(load_stats(replica, &job.topics)),
+        Action::LoadDashboard => loaded.push(load_dashboard(replica, &job.topics)),
         Action::Jump(id) => {
-            loaded.extend(load_todos(replica, job.note.clone()));
+            loaded.extend(load_todos(replica, job.topic.clone()));
             loaded.push(Loaded::Select(id));
         }
         Action::Toggle => {
@@ -240,12 +240,12 @@ fn local(replica: &mut Replica, job: &Job, action: Action) -> Vec<Loaded> {
             }
         }
         Action::Add(mut new, status) => {
-            // `a` only opens the form with a note open.
-            new.note = job.note.clone().unwrap_or_default();
+            // `a` only opens the form with a topic open.
+            new.topic = job.topic.clone().unwrap_or_default();
             let added = replica.add(new, status, today);
-            // A first todo creates its note, so the list may have grown.
-            loaded.push(Loaded::Notes(replica.notes()));
-            loaded.extend(load_todos(replica, job.note.clone()));
+            // A first todo creates its topic, so the list may have grown.
+            loaded.push(Loaded::Topics(replica.topics()));
+            loaded.extend(load_todos(replica, job.topic.clone()));
             loaded.push(Loaded::Select(added.id));
         }
         Action::Change(id, patch) => {
@@ -253,35 +253,35 @@ fn local(replica: &mut Replica, job: &Job, action: Action) -> Vec<Loaded> {
         }
         Action::Delete(id) => {
             replica.delete(&id);
-            loaded.extend(load_todos(replica, job.note.clone()));
+            loaded.extend(load_todos(replica, job.topic.clone()));
         }
     }
     loaded.push(Loaded::Pending(replica.pending()));
     loaded
 }
 
-/// `note`'s todos, if a note is open.
-fn load_todos(replica: &Replica, note: Option<String>) -> Option<Loaded> {
-    note.map(|note| {
-        let todos = replica.todos(&note);
-        Loaded::Todos(note, todos)
+/// `topic`'s todos, if a topic is open.
+fn load_todos(replica: &Replica, topic: Option<String>) -> Option<Loaded> {
+    topic.map(|topic| {
+        let todos = replica.todos(&topic);
+        Loaded::Todos(topic, todos)
     })
 }
 
-/// Every note's counts and next due date.
-fn load_stats(replica: &Replica, notes: &[String]) -> Loaded {
-    let rows = notes
+/// Every topic's counts and next due date.
+fn load_stats(replica: &Replica, topics: &[String]) -> Loaded {
+    let rows = topics
         .iter()
-        .map(|note| {
-            let todos = replica.todos(note);
+        .map(|topic| {
+            let todos = replica.todos(topic);
             let done = todos.iter().filter(|todo| todo.status.is_closed()).count();
             let next_due = todos
                 .iter()
                 .filter(|todo| !todo.status.is_closed())
                 .filter_map(|todo| todo.due)
                 .min();
-            NoteStats {
-                note: note.clone(),
+            TopicStats {
+                topic: topic.clone(),
                 done,
                 total: todos.len(),
                 next_due,
@@ -291,11 +291,11 @@ fn load_stats(replica: &Replica, notes: &[String]) -> Loaded {
     Loaded::Stats(rows)
 }
 
-/// Every note's todos, for the dashboard.
-fn load_dashboard(replica: &Replica, notes: &[String]) -> Loaded {
-    let all = notes
+/// Every topic's todos, for the dashboard.
+fn load_dashboard(replica: &Replica, topics: &[String]) -> Loaded {
+    let all = topics
         .iter()
-        .map(|note| (note.clone(), replica.todos(note)))
+        .map(|topic| (topic.clone(), replica.todos(topic)))
         .collect();
     Loaded::Dashboard(all)
 }

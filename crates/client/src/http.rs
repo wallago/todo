@@ -100,20 +100,20 @@ impl Client {
         send(self.request(Method::GET, None)).await
     }
 
-    /// The todos of one note, like `travel/japan`.
-    pub async fn list_note(&self, note: &str) -> Result<Vec<Todo>> {
+    /// The todos of one topic, like `travel/japan`.
+    pub async fn list_topic(&self, topic: &str) -> Result<Vec<Todo>> {
         let query = TodoQuery {
-            note: Some(note.to_owned()),
+            topic: Some(topic.to_owned()),
         };
         send(self.request(Method::GET, None).query(&query)).await
     }
 
-    /// Every note's name, like `projects/dev`.
-    pub async fn notes(&self) -> Result<Vec<String>> {
-        send(self.call(Method::GET, "/api/notes")).await
+    /// Every topic's name, like `projects/dev`.
+    pub async fn topics(&self) -> Result<Vec<String>> {
+        send(self.call(Method::GET, "/api/topics")).await
     }
 
-    /// Every note and todo changed since `since`, deleted ones included.
+    /// Every topic and todo changed since `since`, deleted ones included.
     /// Pass 0 the first time, then the `cursor` of the last answer.
     pub async fn sync(&self, since: u64) -> Result<Changes> {
         send(
@@ -128,7 +128,7 @@ impl Client {
         send(self.request(Method::GET, Some(id))).await
     }
 
-    /// Adds a todo to `new.note`. Returns it with its
+    /// Adds a todo to `new.topic`. Returns it with its
     /// new id.
     pub async fn add(&self, new: &NewTodo) -> Result<Todo> {
         send(self.request(Method::POST, None).json(new)).await

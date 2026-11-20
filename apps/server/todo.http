@@ -8,15 +8,15 @@ GET {{host}}/api/todos
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Todos of one note
-# @name list_note
-GET {{host}}/api/todos?note=projects/dev
+### Todos of one topic
+# @name list_topic
+GET {{host}}/api/todos?topic=projects/dev
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Every note
-# @name notes
-GET {{host}}/api/notes
+### Every topic
+# @name topics
+GET {{host}}/api/topics
 Authorization: Bearer {{token}}
 Accept: application/json
 
@@ -42,7 +42,7 @@ GET {{host}}/api/todos/a1b2c3
 Authorization: Bearer {{token}}
 Accept: application/json
 
-### Add a todo to a note (created if missing)
+### Add a todo to a topic (created if missing)
 # @name add
 POST {{host}}/api/todos
 Authorization: Bearer {{token}}
@@ -50,21 +50,21 @@ Content-Type: application/json
 
 {
   "text": "Buy milk",
-  "note": "errands",
+  "topic": "errands",
   "priority": "high",
   "due": "2026-10-30",
   "tags": ["errand"]
 }
 
-### Add a todo to another note (created if missing)
-# @name add_to_note
+### Add a todo to another topic (created if missing)
+# @name add_to_topic
 POST {{host}}/api/todos
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
   "text": "Plan the enclosure",
-  "note": "projects/dongle"
+  "topic": "projects/dongle"
 }
 
 ### Add a pinned, weekly todo with no due date

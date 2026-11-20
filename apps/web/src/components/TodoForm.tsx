@@ -12,7 +12,7 @@ import {
 /** What the form edits. */
 export interface Fields {
   text: string;
-  note: string;
+  topic: string;
   due: string;
   priority: Priority;
   repeat: Unit | "";
@@ -21,12 +21,12 @@ export interface Fields {
   pinned: boolean;
 }
 
-/** The form's fields for `entry`, or for a new todo in `note`. */
-export function fieldsOf(entry: Entry | null, note: string): Fields {
+/** The form's fields for `entry`, or for a new todo in `topic`. */
+export function fieldsOf(entry: Entry | null, topic: string): Fields {
   const todo = entry?.todo;
   return {
     text: todo?.text ?? "",
-    note: entry?.note ?? note,
+    topic: entry?.topic ?? topic,
     due: todo?.due ?? "",
     priority: todo?.priority ?? "normal",
     repeat: todo?.recur?.unit ?? "",
@@ -78,24 +78,24 @@ const REPEATS: [Unit | "", string][] = [
 interface Props {
   /** The todo to edit, or `null` to add one. */
   entry: Entry | null;
-  /** Note a new todo goes in by default. */
-  note: string;
-  notes: string[];
+  /** Topic a new todo goes in by default. */
+  topic: string;
+  topics: string[];
   onSave: (fields: Fields) => void;
   onDelete: () => void;
   onClose: () => void;
 }
 
 /** Add or edit one todo, over the page. */
-export function TodoForm({ entry, note, notes, onSave, onDelete, onClose }: Props) {
-  const [fields, setFields] = useState(() => fieldsOf(entry, note));
+export function TodoForm({ entry, topic, topics, onSave, onDelete, onClose }: Props) {
+  const [fields, setFields] = useState(() => fieldsOf(entry, topic));
   const [deleting, setDeleting] = useState(false);
   const list = useId();
   const set = <K extends keyof Fields>(key: K, value: Fields[K]) =>
     setFields((old) => ({ ...old, [key]: value }));
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!fields.text.trim() || !fields.note.trim()) return;
+    if (!fields.text.trim() || !fields.topic.trim()) return;
     onSave(fields);
   };
   return (
@@ -119,12 +119,12 @@ export function TodoForm({ entry, note, notes, onSave, onDelete, onClose }: Prop
             autoComplete="off"
             autoCapitalize="none"
             disabled={Boolean(entry)}
-            value={fields.note}
-            onChange={(e) => set("note", e.target.value)}
+            value={fields.topic}
+            onChange={(e) => set("topic", e.target.value)}
           />
         </label>
         <datalist id={list}>
-          {notes.map((n) => (
+          {topics.map((n) => (
             <option key={n} value={n} />
           ))}
         </datalist>

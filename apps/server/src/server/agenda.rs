@@ -42,8 +42,8 @@ struct AgendaTodo {
     id: Id,
     /// What to do.
     text: String,
-    /// The note it's in, like `projects/dev`.
-    note: String,
+    /// The topic it's in, like `projects/dev`.
+    topic: String,
     /// Due date.
     due: NaiveDate,
     /// `true` if due before today.
@@ -66,13 +66,13 @@ impl Agenda {
         let mut todos: Vec<AgendaTodo> = todos
             .into_iter()
             .filter(|(_, todo)| !todo.status.is_closed())
-            .filter_map(|(note, todo)| {
+            .filter_map(|(topic, todo)| {
                 let due = todo.due.filter(|due| *due <= today)?;
                 Some(AgendaTodo {
                     overdue: todo.is_overdue(today),
                     id: todo.id,
                     text: todo.text,
-                    note,
+                    topic,
                     due,
                     priority: todo.priority,
                 })
@@ -135,8 +135,8 @@ mod tests {
         (status, String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    /// A note with todos due around `today()`.
-    fn note() -> String {
+    /// A topic with todos due around `today()`.
+    fn topic() -> String {
         let day = |offset: i64| today() + chrono::Duration::days(offset);
         format!(
             "- [ ] later 📅 {} ^aaaaaa\n\
@@ -158,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn json_lists_overdue_then_today() {
-        let (_state, app) = test_app(&note());
+        let (_state, app) = test_app(&topic());
         let (status, body) = get(&app, "/api/agenda").await;
         assert_eq!(status, StatusCode::OK);
         let body: Value = serde_json::from_str(&body).expect("json");
@@ -175,7 +175,7 @@ mod tests {
             .filter_map(|todo| todo["id"].as_str())
             .collect();
         assert_eq!(ids, ["dddddd", "cccccc", "bbbbbb"]);
-        assert_eq!(body["todos"][0]["note"], "todo");
+        assert_eq!(body["todos"][0]["topic"], "todo");
         assert_eq!(body["todos"][0]["overdue"], true);
         assert_eq!(body["todos"][1]["overdue"], false);
     }

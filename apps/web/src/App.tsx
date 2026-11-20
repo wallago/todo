@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { dueCount, showBadge } from "./badge";
-import { DuePage, NotePage, NotesPage, PinnedPage } from "./components/Pages";
+import { DuePage, PinnedPage, TopicPage, TopicsPage } from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
 import type { Entry } from "./replica";
@@ -69,7 +69,7 @@ export function App({ store }: { store: Store }) {
         {
           id: crypto.randomUUID(),
           text: fields.text.trim(),
-          note: fields.note.trim().replace(/\.md$/, ""),
+          topic: fields.topic.trim().replace(/\.md$/, ""),
           priority: fields.priority,
           due: fields.due || null,
           tags: parseTags(fields.tags),
@@ -117,12 +117,12 @@ export function App({ store }: { store: Store }) {
         </button>
       </header>
       <main>
-        {route.page === "note" ? (
-          <NotePage note={route.note} {...list} />
+        {route.page === "topic" ? (
+          <TopicPage topic={route.topic} {...list} />
         ) : route.page === "pinned" ? (
           <PinnedPage {...list} />
-        ) : route.page === "notes" ? (
-          <NotesPage notes={replica.notes} todos={replica.todos} />
+        ) : route.page === "topics" ? (
+          <TopicsPage topics={replica.topics} todos={replica.todos} />
         ) : (
           <DuePage {...list} />
         )}
@@ -138,8 +138,8 @@ export function App({ store }: { store: Store }) {
       {editing !== undefined && (
         <TodoForm
           entry={editing}
-          note={route.page === "note" ? route.note : (replica.notes[0] ?? "")}
-          notes={replica.notes}
+          topic={route.page === "topic" ? route.topic : (replica.topics[0] ?? "")}
+          topics={replica.topics}
           onSave={save}
           onDelete={() => {
             if (editing) store.remove(editing.todo.id);

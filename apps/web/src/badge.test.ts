@@ -5,7 +5,7 @@ import type { Todo } from "./todo";
 
 function entry(due: string | null, status: Todo["status"] = "todo"): Entry {
   return {
-    note: "main",
+    topic: "main",
     todo: {
       id: crypto.randomUUID(),
       text: "t",

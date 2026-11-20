@@ -49,11 +49,12 @@ pub(super) struct Pending {
     pub(super) op: Op,
 }
 
-/// One todo and the note it belongs to.
+/// One todo and the topic it belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Entry {
-    /// Note name, like `projects/todo/main`.
-    note: String,
+    /// Topic name, like `projects/todo/main`.
+    #[serde(alias = "note")] // a copy saved before the rename
+    topic: String,
     /// The todo as last known here.
     todo: Todo,
 }
@@ -68,8 +69,9 @@ pub(super) struct Replica {
     /// Set when the server refused a change: the next sync fetches
     /// everything instead of what changed since `cursor`.
     resync: bool,
-    /// Every note name, sorted.
-    notes: BTreeSet<String>,
+    /// Every topic name, sorted.
+    #[serde(alias = "notes")] // a copy saved before the rename
+    topics: BTreeSet<String>,
     /// Every todo, in the order they arrived.
     todos: Vec<Entry>,
     /// Changes not sent yet, oldest first.
@@ -128,9 +130,9 @@ impl Replica {
         }
     }
 
-    /// Every note name, sorted.
-    pub(super) fn notes(&self) -> Vec<String> {
-        self.notes.iter().cloned().collect()
+    /// Every topic name, sorted.
+    pub(super) fn topics(&self) -> Vec<String> {
+        self.topics.iter().cloned().collect()
     }
 
     /// Every todo.
@@ -138,11 +140,11 @@ impl Replica {
         self.todos.iter().map(|entry| entry.todo.clone()).collect()
     }
 
-    /// The todos of `note`.
-    pub(super) fn todos(&self, note: &str) -> Vec<Todo> {
+    /// The todos of `topic`.
+    pub(super) fn todos(&self, topic: &str) -> Vec<Todo> {
         self.todos
             .iter()
-            .filter(|entry| entry.note == note)
+            .filter(|entry| entry.topic == topic)
             .map(|entry| entry.todo.clone())
             .collect()
     }
@@ -152,7 +154,7 @@ impl Replica {
         self.outbox.len()
     }
 
-    /// Adds `new` to its note with a fresh id, then gives it `status`,
+    /// Adds `new` to its topic with a fresh id, then gives it `status`,
     /// and queues both. Returns the todo.
     pub(super) fn add(&mut self, mut new: NewTodo, status: Status, today: NaiveDate) -> Todo {
         let id = new
@@ -168,9 +170,9 @@ impl Replica {
         if let Some(patch) = &patch {
             patch.clone().apply(&mut todo, today);
         }
-        self.notes.insert(new.note.clone());
+        self.topics.insert(new.topic.clone());
         self.todos.push(Entry {
-            note: new.note.clone(),
+            topic: new.topic.clone(),
             todo: todo.clone(),
         });
         self.queue(Op::Add(new));
@@ -225,7 +227,7 @@ impl Replica {
     pub(super) fn merge(&mut self, changes: Changes, since: u64) {
         if since == 0 {
             // Everything: keep only what's still waiting to be sent.
-            self.notes.clear();
+            self.topics.clear();
             let waiting: BTreeSet<Id> = self
                 .outbox
                 .iter()
@@ -233,15 +235,15 @@ impl Replica {
                 .cloned()
                 .collect();
             self.todos.retain(|entry| waiting.contains(&entry.todo.id));
-            self.notes
-                .extend(self.todos.iter().map(|entry| entry.note.clone()));
+            self.topics
+                .extend(self.todos.iter().map(|entry| entry.topic.clone()));
             self.resync = false;
         }
-        for note in changes.notes {
-            if note.deleted {
-                self.notes.remove(&note.name);
+        for topic in changes.topics {
+            if topic.deleted {
+                self.topics.remove(&topic.name);
             } else {
-                self.notes.insert(note.name);
+                self.topics.insert(topic.name);
             }
         }
         for change in changes.todos {
@@ -261,12 +263,12 @@ impl Replica {
                 (None, true) => {}
                 (Some(at), false) => {
                     if let Some(entry) = self.todos.get_mut(at) {
-                        entry.note = change.note;
+                        entry.topic = change.topic;
                         entry.todo = change.todo;
                     }
                 }
                 (None, false) => self.todos.push(Entry {
-                    note: change.note,
+                    topic: change.topic,
                     todo: change.todo,
                 }),
             }
@@ -285,7 +287,7 @@ impl Replica {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use todo_client::{NoteChange, TodoChange};
+    use todo_client::{TodoChange, TopicChange};
 
     use super::*;
 
@@ -294,14 +296,14 @@ mod tests {
     fn new(text: &str) -> NewTodo {
         NewTodo {
             text: text.into(),
-            note: "errands".into(),
+            topic: "errands".into(),
             ..NewTodo::default()
         }
     }
 
-    fn change(note: &str, todo: Todo, deleted: bool) -> TodoChange {
+    fn change(topic: &str, todo: Todo, deleted: bool) -> TodoChange {
         TodoChange {
-            note: note.into(),
+            topic: topic.into(),
             deleted,
             todo,
         }
@@ -310,9 +312,24 @@ mod tests {
     fn changes(cursor: u64, todos: Vec<TodoChange>) -> Changes {
         Changes {
             cursor,
-            notes: Vec::new(),
+            topics: Vec::new(),
             todos,
         }
+    }
+
+    #[test]
+    fn a_copy_saved_before_topics_still_loads() {
+        let todo = serde_json::to_value(Todo::new(Id("a".into()), "milk", TODAY)).expect("json");
+        let saved = serde_json::json!({
+            "server": "s", "cursor": 3, "resync": false, "notes": ["errands"],
+            "todos": [{"note": "errands", "todo": todo}],
+            "outbox": [{"seq": 0, "op": {"Add": {"text": "eggs", "note": "errands"}}}],
+            "next_seq": 1,
+        });
+        let replica: Replica = serde_json::from_value(saved).expect("old copy");
+        assert_eq!(replica.topics(), vec!["errands".to_owned()]);
+        assert_eq!(replica.todos("errands").len(), 1);
+        assert_eq!(replica.pending(), 1);
     }
 
     #[test]
@@ -321,7 +338,7 @@ mod tests {
         let todo = replica.add(new("milk"), Status::Todo, TODAY);
         assert_eq!(todo.id.0.len(), 36, "a UUID");
         assert_eq!(replica.todos("errands"), vec![todo.clone()]);
-        assert_eq!(replica.notes(), vec!["errands".to_owned()]);
+        assert_eq!(replica.topics(), vec!["errands".to_owned()]);
         let Some(Pending {
             op: Op::Add(sent), ..
         }) = replica.next()
@@ -382,12 +399,12 @@ mod tests {
                 change("home", b, false),
             ],
         );
-        update.notes = vec![
-            NoteChange {
+        update.topics = vec![
+            TopicChange {
                 name: "errands".into(),
                 deleted: false,
             },
-            NoteChange {
+            TopicChange {
                 name: "home".into(),
                 deleted: false,
             },
@@ -403,13 +420,13 @@ mod tests {
                 true,
             )],
         );
-        gone.notes = vec![NoteChange {
+        gone.topics = vec![TopicChange {
             name: "home".into(),
             deleted: true,
         }];
         replica.merge(gone, 2);
         assert_eq!(replica.all(), vec![a]);
-        assert_eq!(replica.notes(), vec!["errands".to_owned()]);
+        assert_eq!(replica.topics(), vec!["errands".to_owned()]);
     }
 
     #[test]
@@ -420,7 +437,7 @@ mod tests {
         replica.merge(changes(5, vec![change("errands", stale, false)]), 0);
         let texts: Vec<String> = replica.all().into_iter().map(|todo| todo.text).collect();
         assert_eq!(texts, vec!["milk".to_owned()]);
-        assert_eq!(replica.notes(), vec!["errands".to_owned()]);
+        assert_eq!(replica.topics(), vec!["errands".to_owned()]);
     }
 
     #[test]
@@ -436,7 +453,7 @@ mod tests {
         assert_eq!(replica.since(), 0, "everything");
         replica.merge(changes(4, Vec::new()), 0);
         assert_eq!(replica.all(), Vec::new());
-        assert_eq!(replica.notes(), Vec::<String>::new());
+        assert_eq!(replica.topics(), Vec::<String>::new());
         assert_eq!(replica.since(), 4);
     }
 

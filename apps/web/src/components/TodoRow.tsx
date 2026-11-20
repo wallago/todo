@@ -11,14 +11,14 @@ export function dueClass(todo: Todo, today = isoDate(), sunday = endOfWeek()): s
 
 interface Props {
   todo: Todo;
-  /** Shown under the text, on pages that mix notes. */
-  note?: string | undefined;
+  /** Shown under the text, on pages that mix topics. */
+  topic?: string | undefined;
   onToggle: (done: boolean) => void;
   onOpen: () => void;
 }
 
 /** One todo: its box, text, and what's known about it. */
-export function TodoRow({ todo, note, onToggle, onOpen }: Props) {
+export function TodoRow({ todo, topic, onToggle, onOpen }: Props) {
   const closed = isClosed(todo);
   return (
     <li className={`todo ${todo.status}${closed ? " closed" : ""}`}>
@@ -40,7 +40,7 @@ export function TodoRow({ todo, note, onToggle, onOpen }: Props) {
           {(todo.tags ?? []).map((tag) => (
             <span key={tag}>#{tag}</span>
           ))}
-          {note && <span>{note}</span>}
+          {topic && <span>{topic}</span>}
         </span>
       </button>
     </li>

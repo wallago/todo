@@ -47,9 +47,9 @@ fn import(args: &Args, vault: &std::path::Path, db: Option<&std::path::Path>) ->
     };
     let report = todo_store::Store::open(&path)?.import_vault(vault)?;
     println!(
-        "{}: {} notes read, {} todos added, {} already there",
+        "{}: {} topics read, {} todos added, {} already there",
         path.display(),
-        report.notes,
+        report.topics,
         report.added,
         report.skipped
     );

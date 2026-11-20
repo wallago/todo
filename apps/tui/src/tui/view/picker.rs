@@ -1,4 +1,4 @@
-//! The note finder popup, centred over the page.
+//! The topic finder popup, centred over the page.
 
 use chrono::NaiveDate;
 use ratatui::{
@@ -11,16 +11,16 @@ use ratatui::{
 
 use super::{list, pane};
 use crate::tui::{
-    state::{NoteStats, Picker},
+    state::{Picker, TopicStats},
     theme::{ACCENT, BACKGROUND, HIGHLIGHT, PRIMARY},
 };
 
-/// A query line, then the matching notes, each with when its next open
+/// A query line, then the matching topics, each with when its next open
 /// todo is due on the right.
-pub(super) fn render(picker: &mut Picker, stats: &[NoteStats], frame: &mut Frame, page: Rect) {
+pub(super) fn render(picker: &mut Picker, stats: &[TopicStats], frame: &mut Frame, page: Rect) {
     let area = page.centered(Constraint::Percentage(70), Constraint::Percentage(70));
     frame.render_widget(Clear, area);
-    let block = pane("find note", true).bg(BACKGROUND);
+    let block = pane("find topic", true).bg(BACKGROUND);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let [query, _, matches] = Layout::vertical([
@@ -35,10 +35,10 @@ pub(super) fn render(picker: &mut Picker, stats: &[NoteStats], frame: &mut Frame
         Span::styled("▏", ACCENT),
     ]);
     frame.render_widget(line, query);
-    if let Some(note) = picker.new_note() {
+    if let Some(topic) = picker.new_topic() {
         let hint = Line::from(vec![
-            Span::styled("+ new note ", ACCENT),
-            Span::styled(note.clone(), PRIMARY),
+            Span::styled("+ new topic ", ACCENT),
+            Span::styled(topic.clone(), PRIMARY),
         ]);
         frame.render_widget(hint, matches);
         return;
@@ -46,11 +46,11 @@ pub(super) fn render(picker: &mut Picker, stats: &[NoteStats], frame: &mut Frame
     let today = chrono::Local::now().date_naive();
     // Less the `▌ ` highlight bar.
     let width = usize::from(matches.width).saturating_sub(2);
-    let rows = picker.matches.iter().map(|note| {
-        let name = note.as_str();
+    let rows = picker.matches.iter().map(|topic| {
+        let name = topic.as_str();
         let due = stats
             .iter()
-            .find(|row| &row.note == note)
+            .find(|row| &row.topic == topic)
             .and_then(|row| row.next_due)
             .map(|due| due_label(due, today));
         row(name, due, width)

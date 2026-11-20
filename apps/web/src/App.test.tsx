@@ -24,7 +24,7 @@ function saved(text: string, due: string | null, pinned = false) {
     {
       id: "a",
       text,
-      note: "projects/demo",
+      topic: "projects/demo",
       priority: "normal",
       due,
       tags: [],
@@ -62,7 +62,7 @@ describe("App", () => {
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
       offline,
     );
-    window.location.hash = "#/note/projects%2Fdemo";
+    window.location.hash = "#/topic/projects%2Fdemo";
     render(<App store={store} />);
     fireEvent.click(screen.getByRole("button", { name: "Add a todo" }));
     const form = screen.getByRole("dialog", { name: "Add" });
@@ -111,7 +111,7 @@ describe("App", () => {
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
       offline,
     );
-    window.location.hash = "#/note/projects%2Fdemo";
+    window.location.hash = "#/topic/projects%2Fdemo";
     render(<App store={store} />);
     fireEvent.click(screen.getByRole("checkbox", { name: "Done: buy milk" }));
     expect(screen.getByText("Done (1)")).toBeDefined();

@@ -1,13 +1,13 @@
-//! The manager page: one note's todos.
+//! The manager page: one topic's todos.
 
 use ratatui::widgets::ListState;
 use todo_client::{Id, Priority, Status, Todo};
 
-/// The note open on the manager page, and its todos.
+/// The topic open on the manager page, and its todos.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Manager {
-    /// Open note, like `projects/todo`.
-    pub(in crate::tui) note: Option<String>,
+    /// Open topic, like `projects/todo`.
+    pub(in crate::tui) topic: Option<String>,
     /// Its todos.
     pub(in crate::tui) todos: Vec<Todo>,
     /// Selected row of [`Self::todos`].
@@ -15,10 +15,10 @@ pub(in crate::tui) struct Manager {
 }
 
 impl Manager {
-    /// Switches to `note`; its todos come with the next load.
-    pub(in crate::tui) fn open(&mut self, note: Option<String>) {
-        if note != self.note {
-            self.note = note;
+    /// Switches to `topic`; its todos come with the next load.
+    pub(in crate::tui) fn open(&mut self, topic: Option<String>) {
+        if topic != self.topic {
+            self.topic = topic;
             self.todos.clear();
             self.list.select(None);
         }

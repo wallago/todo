@@ -1,6 +1,6 @@
-//! Owns the todo database: one SQLite file with notes and todos.
+//! Owns the todo database: one SQLite file with topics and todos.
 //!
-//! A note is a subject (a project, a trip...) named like a path,
+//! A topic is a subject (a project, a trip...) named like a path,
 //! `projects/todo/main.md`. Deleting a todo only marks it deleted
 //! (`deleted_at`), so offline clients can learn about it later.
 
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
-use todo_core::{Changes, Id, NoteChange, Recur, Status, Todo, TodoChange};
+use todo_core::{Changes, Id, Recur, Status, Todo, TodoChange, TopicChange};
 use uuid::Uuid;
 
 /// What can go wrong in the store.
@@ -34,9 +34,9 @@ pub enum Error {
     /// Another todo, maybe a deleted one, already has this id.
     #[error("id `{}` is already used", .0.0)]
     DuplicateId(Id),
-    /// The note name is not a relative `.md` path.
-    #[error("`{0}` is not a note name: give a path like `projects/dev`")]
-    BadNote(String),
+    /// The topic name is not a relative `.md` path.
+    #[error("`{0}` is not a topic name: give a path like `projects/dev`")]
+    BadTopic(String),
 }
 
 /// Shorthand for the store's results.
@@ -44,7 +44,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Schema changes, in order. `PRAGMA user_version` counts those applied.
 /// Only ever append: a deployed database already ran the old ones.
-const MIGRATIONS: &[&str] = &[r"
+const MIGRATIONS: &[&str] = &[
+    r"
 -- Sync: every insert or change takes the next number of one counter (see
 -- the triggers), so a client asks for `version > cursor` without trusting
 -- any clock.
@@ -100,8 +101,38 @@ BEGIN
     UPDATE sync_counter SET version = version + 1;
     UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
 END;
-"];
-/// Columns read into a [`Todo`] by [`read_todo`]; column 8 is its note's name.
+",
+    r"
+-- Notes are called topics now. Renaming keeps every reference, the triggers'
+-- included; the indexes and triggers are then remade under the new names.
+ALTER TABLE notes RENAME TO topics;
+ALTER TABLE todos RENAME COLUMN note_id TO topic_id;
+
+DROP INDEX todos_note_id;
+DROP INDEX notes_version;
+CREATE INDEX todos_topic_id ON todos(topic_id);
+CREATE INDEX topics_version ON topics(version);
+
+DROP TRIGGER notes_version_insert;
+DROP TRIGGER notes_version_update;
+DROP TRIGGER todos_version_update;
+CREATE TRIGGER topics_version_insert AFTER INSERT ON topics BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE topics SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER topics_version_update AFTER UPDATE OF name, deleted_at ON topics BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE topics SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER todos_version_update AFTER UPDATE OF
+    topic_id, text, status, priority, due, done, tags, pinned, recur, deleted_at ON todos
+BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+",
+];
+/// Columns read into a [`Todo`] by [`read_todo`]; column 8 is its topic's name.
 const TODO_COLUMNS: &str = "t.id, t.text, t.status, t.priority, t.due, t.done, t.tags, \
     t.created_at, n.name, t.pinned, t.recur";
 
@@ -149,34 +180,34 @@ impl Store {
         Ok(Self { conn })
     }
 
-    /// Every todo with its note's name, note by note, in the order they were
-    /// added. Only those of `note` if given.
+    /// Every todo with its topic's name, topic by topic, in the order they were
+    /// added. Only those of `topic` if given.
     ///
     /// # Errors
     ///
     /// [`Error::Db`] if the query fails.
-    pub fn todos_by_note(&self, note: Option<&str>) -> Result<Vec<(String, Todo)>> {
+    pub fn todos_by_topic(&self, topic: Option<&str>) -> Result<Vec<(String, Todo)>> {
         let sql = format!(
-            "SELECT {TODO_COLUMNS} FROM todos t JOIN notes n ON n.id = t.note_id
+            "SELECT {TODO_COLUMNS} FROM todos t JOIN topics n ON n.id = t.topic_id
             WHERE t.deleted_at IS NULL AND (?1 IS NULL OR n.name = ?1)
             ORDER BY n.name, t.rowid"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         // A bad name matches nothing.
-        let note = note.map(|note| note_name(note).unwrap_or_default());
-        let rows = stmt.query_map([note], |row| Ok((row.get(8)?, read_todo(row)?)))?;
+        let topic = topic.map(|topic| topic_name(topic).unwrap_or_default());
+        let rows = stmt.query_map([topic], |row| Ok((row.get(8)?, read_todo(row)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Every note's name, todos or not, sorted.
+    /// Every topic's name, todos or not, sorted.
     ///
     /// # Errors
     ///
     /// [`Error::Db`] if the query fails.
-    pub fn notes(&self) -> Result<Vec<String>> {
+    pub fn topics(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare_cached("SELECT name FROM notes WHERE deleted_at IS NULL ORDER BY name")?;
+            .prepare_cached("SELECT name FROM topics WHERE deleted_at IS NULL ORDER BY name")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -190,15 +221,15 @@ impl Store {
         get(&self.conn, id)
     }
 
-    /// Adds a todo to `note`, creating the note if it is missing. A todo
+    /// Adds a todo to `topic`, creating the topic if it is missing. A todo
     /// without an id gets a new UUID. Returns it as saved.
     ///
     /// # Errors
     ///
-    /// [`Error::BadNote`] if `note` is not a note name,
+    /// [`Error::BadTopic`] if `topic` is not a topic name,
     /// [`Error::DuplicateId`] if its id is taken, [`Error::Db`] on failure.
-    pub fn add_to(&mut self, note: &str, mut todo: Todo) -> Result<Todo> {
-        let note = note_name(note)?;
+    pub fn add_to(&mut self, topic: &str, mut todo: Todo) -> Result<Todo> {
+        let topic = topic_name(topic)?;
         if todo.id.0.is_empty() {
             todo.id = Id(Uuid::now_v7().to_string());
         }
@@ -207,8 +238,8 @@ impl Store {
         if id_taken(&tx, &todo.id)? {
             return Err(Error::DuplicateId(todo.id));
         }
-        let note_id = ensure_note(&tx, &note, &now)?;
-        insert(&tx, &note_id, &todo, &now)?;
+        let topic_id = ensure_topic(&tx, &topic, &now)?;
+        insert(&tx, &topic_id, &todo, &now)?;
         let saved = get(&tx, &todo.id)?.ok_or_else(|| Error::NotFound(todo.id.clone()))?;
         tx.commit()?;
         Ok(saved)
@@ -216,7 +247,7 @@ impl Store {
 
     /// Changes a todo. Its id can't change. Returns it as saved.
     ///
-    /// Completing a recurring todo also adds the next one to its note (see
+    /// Completing a recurring todo also adds the next one to its topic (see
     /// [`todo_core::Recur::follow_up`]); the done one stops recurring, so
     /// reopening and completing it again doesn't add a second copy.
     ///
@@ -236,11 +267,11 @@ impl Store {
             let today = todo.done.unwrap_or_else(|| Local::now().date_naive());
             let mut next = recur.follow_up(&todo, today);
             next.id = Id(Uuid::now_v7().to_string());
-            let note_id: String =
-                tx.query_row("SELECT note_id FROM todos WHERE id = ?1", [&id.0], |row| {
+            let topic_id: String =
+                tx.query_row("SELECT topic_id FROM todos WHERE id = ?1", [&id.0], |row| {
                     row.get(0)
                 })?;
-            insert(&tx, &note_id, &next, &now)?;
+            insert(&tx, &topic_id, &next, &now)?;
         }
         if todo != before {
             tx.execute(
@@ -281,7 +312,7 @@ impl Store {
         Ok(todo)
     }
 
-    /// Every note and todo changed after `since` (a cursor from an earlier
+    /// Every topic and todo changed after `since` (a cursor from an earlier
     /// call, or 0 for everything), deleted ones included, and the cursor to
     /// send next time.
     ///
@@ -293,12 +324,12 @@ impl Store {
         // One read transaction: the cursor matches the rows exactly.
         let tx = self.conn.transaction()?;
         let cursor: i64 = tx.query_row("SELECT version FROM sync_counter", [], |row| row.get(0))?;
-        let notes = tx
+        let topics = tx
             .prepare_cached(
-                "SELECT name, deleted_at IS NOT NULL FROM notes WHERE version > ?1 ORDER BY name",
+                "SELECT name, deleted_at IS NOT NULL FROM topics WHERE version > ?1 ORDER BY name",
             )?
             .query_map([since], |row| {
-                Ok(NoteChange {
+                Ok(TopicChange {
                     name: row.get(0)?,
                     deleted: row.get(1)?,
                 })
@@ -306,14 +337,14 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?;
         let sql = format!(
             "SELECT {TODO_COLUMNS}, t.deleted_at IS NOT NULL FROM todos t
-            JOIN notes n ON n.id = t.note_id
+            JOIN topics n ON n.id = t.topic_id
             WHERE t.version > ?1 ORDER BY t.version"
         );
         let todos = tx
             .prepare_cached(&sql)?
             .query_map([since], |row| {
                 Ok(TodoChange {
-                    note: row.get(8)?,
+                    topic: row.get(8)?,
                     deleted: row.get(11)?,
                     todo: read_todo(row)?,
                 })
@@ -322,7 +353,7 @@ impl Store {
         tx.commit()?;
         Ok(Changes {
             cursor: u64::try_from(cursor).unwrap_or(0),
-            notes,
+            topics,
             todos,
         })
     }
@@ -343,7 +374,7 @@ impl Store {
     /// transaction. Never writes to the vault.
     ///
     /// Safe to run again: todos whose id is already in the database are
-    /// skipped. A task without a `^id` gets one made from its note, line
+    /// skipped. A task without a `^id` gets one made from its topic, line
     /// position and text, so it is skipped the next time too.
     ///
     /// # Errors
@@ -361,23 +392,23 @@ impl Store {
             let full = root.join(&path);
             let src =
                 fs::read_to_string(&full).map_err(|source| Error::Io { path: full, source })?;
-            let note = path
+            let topic = path
                 .with_extension("")
                 .components()
                 .map(|part| part.as_os_str().to_string_lossy())
                 .collect::<Vec<_>>()
                 .join("/");
-            let note_id = ensure_note(&tx, &note, &now)?;
-            report.notes += 1;
+            let topic_id = ensure_topic(&tx, &topic, &now)?;
+            report.topics += 1;
             for (n, mut todo) in todo_md::parse_note(&src).into_iter().enumerate() {
                 if todo.id.0.is_empty() {
-                    let seed = format!("{note}\n{n}\n{}", todo.text);
+                    let seed = format!("{topic}\n{n}\n{}", todo.text);
                     todo.id = Id(Uuid::new_v5(&Uuid::NAMESPACE_OID, seed.as_bytes()).to_string());
                 }
                 if id_taken(&tx, &todo.id)? {
                     report.skipped += 1;
                 } else {
-                    insert(&tx, &note_id, &todo, &now)?;
+                    insert(&tx, &topic_id, &todo, &now)?;
                     report.added += 1;
                 }
             }
@@ -390,8 +421,8 @@ impl Store {
 /// What [`Store::import_vault`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Imported {
-    /// Notes read.
-    pub notes: usize,
+    /// Topics read.
+    pub topics: usize,
     /// Todos added.
     pub added: usize,
     /// Todos skipped because their id was already in the database.
@@ -413,7 +444,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
 /// The todo with this id, unless deleted.
 fn get(conn: &Connection, id: &Id) -> Result<Option<Todo>> {
     let sql = format!(
-        "SELECT {TODO_COLUMNS} FROM todos t JOIN notes n ON n.id = t.note_id
+        "SELECT {TODO_COLUMNS} FROM todos t JOIN topics n ON n.id = t.topic_id
         WHERE t.id = ?1 AND t.deleted_at IS NULL"
     );
     Ok(conn
@@ -429,11 +460,11 @@ fn id_taken(tx: &Transaction<'_>, id: &Id) -> Result<bool> {
         .exists([&id.0])?)
 }
 
-/// The id of the note with this name, created (or undeleted) if needed.
-fn ensure_note(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
+/// The id of the topic with this name, created (or undeleted) if needed.
+fn ensure_topic(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
     let found: Option<(String, Option<String>)> = tx
         .query_row(
-            "SELECT id, deleted_at FROM notes WHERE name = ?1",
+            "SELECT id, deleted_at FROM topics WHERE name = ?1",
             [name],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -442,7 +473,7 @@ fn ensure_note(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
         Some((id, None)) => Ok(id),
         Some((id, Some(_))) => {
             tx.execute(
-                "UPDATE notes SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1",
+                "UPDATE topics SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1",
                 params![id, now],
             )?;
             Ok(id)
@@ -450,7 +481,7 @@ fn ensure_note(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
         None => {
             let id = Uuid::now_v7().to_string();
             tx.execute(
-                "INSERT INTO notes (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                "INSERT INTO topics (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
                 params![id, name, now],
             )?;
             Ok(id)
@@ -459,15 +490,15 @@ fn ensure_note(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
 }
 
 /// Inserts a todo. Its created date, if any, becomes `created_at`.
-fn insert(tx: &Transaction<'_>, note_id: &str, todo: &Todo, now: &str) -> Result<()> {
+fn insert(tx: &Transaction<'_>, topic_id: &str, todo: &Todo, now: &str) -> Result<()> {
     let created_at = todo.created.map_or_else(|| now.to_owned(), local_midnight);
     tx.execute(
-        "INSERT INTO todos (id, note_id, text, status, priority, due, done, tags, pinned, recur,
+        "INSERT INTO todos (id, topic_id, text, status, priority, due, done, tags, pinned, recur,
                             created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             todo.id.0,
-            note_id,
+            topic_id,
             todo.text,
             to_sql(todo.status),
             to_sql(todo.priority),
@@ -559,11 +590,11 @@ fn local_midnight(date: NaiveDate) -> String {
     local.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// A note's name as stored: `/`-separated parts like `projects/dev`, none
+/// A topic's name as stored: `/`-separated parts like `projects/dev`, none
 /// empty or starting with `.`. A trailing `.md` is dropped, so the old vault
-/// paths still find their note.
-fn note_name(note: &str) -> Result<String> {
-    let name = note.trim();
+/// paths still find their topic.
+fn topic_name(topic: &str) -> Result<String> {
+    let name = topic.trim();
     let name = name.strip_suffix(".md").unwrap_or(name);
     let clean = !name.is_empty()
         && name.split('/').all(|part| {
@@ -575,7 +606,7 @@ fn note_name(note: &str) -> Result<String> {
     if clean {
         Ok(name.to_owned())
     } else {
-        Err(Error::BadNote(note.to_owned()))
+        Err(Error::BadTopic(topic.to_owned()))
     }
 }
 
@@ -626,6 +657,29 @@ mod tests {
         Store::open_in_memory().expect("store")
     }
 
+    #[test]
+    fn a_database_from_before_topics_keeps_its_notes() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(MIGRATIONS[0])?;
+        conn.pragma_update(None, "user_version", 1)?;
+        conn.execute_batch(
+            "INSERT INTO notes (id, name, created_at, updated_at) VALUES ('n', 'home', 'x', 'x');
+            INSERT INTO todos (id, note_id, text, status, priority, created_at, updated_at)
+            VALUES ('a', 'n', 'water plants', 'todo', 'normal', '2026-10-25T00:00:00Z', 'x');",
+        )?;
+        let mut store = Store::setup(conn)?;
+        assert_eq!(store.topics()?, ["home"]);
+        assert_eq!(store.todos_by_topic(Some("home"))?.len(), 1);
+        let before = store.changes(0)?.cursor;
+        store.add_to("home", Todo::new(id("b"), "repot", today()))?;
+        assert_eq!(
+            store.changes(before)?.todos.len(),
+            1,
+            "the sync counter still runs"
+        );
+        Ok(())
+    }
+
     /// A temp vault holding `files` as (path, content).
     fn vault(files: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -649,21 +703,21 @@ mod tests {
         todo.id = saved.id.clone();
         assert_eq!(saved, todo);
         assert_eq!(store.get(&saved.id)?, Some(todo));
-        assert_eq!(store.notes()?, ["todo"]);
+        assert_eq!(store.topics()?, ["todo"]);
         Ok(())
     }
 
     #[test]
-    fn notes_are_created_on_first_todo_and_listed_in_order() -> Result<()> {
+    fn topics_are_created_on_first_todo_and_listed_in_order() -> Result<()> {
         let mut store = store();
         store.add_to("projects/dev", Todo::new(id("b"), "b", today()))?;
         store.add_to("a.md", Todo::new(id("a"), "a", today()))?;
         store.add_to("projects/dev", Todo::new(id("c"), "c", today()))?;
-        assert_eq!(store.notes()?, ["a", "projects/dev"]);
+        assert_eq!(store.topics()?, ["a", "projects/dev"]);
         let listed: Vec<(String, String)> = store
-            .todos_by_note(None)?
+            .todos_by_topic(None)?
             .into_iter()
-            .map(|(note, todo)| (note, todo.id.0))
+            .map(|(topic, todo)| (topic, todo.id.0))
             .collect();
         assert_eq!(
             listed,
@@ -673,14 +727,14 @@ mod tests {
                 ("projects/dev".into(), "c".into()),
             ]
         );
-        assert_eq!(store.todos_by_note(Some("a.md"))?.len(), 1);
+        assert_eq!(store.todos_by_topic(Some("a.md"))?.len(), 1);
         Ok(())
     }
 
     #[test]
-    fn bad_note_names_and_taken_ids_are_refused() -> Result<()> {
+    fn bad_topic_names_and_taken_ids_are_refused() -> Result<()> {
         let mut store = store();
-        for note in [
+        for topic in [
             "../out",
             "/tmp/out",
             ".obsidian/x",
@@ -691,10 +745,10 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    store.add_to(note, Todo::new(id("x"), "x", today())),
-                    Err(Error::BadNote(_))
+                    store.add_to(topic, Todo::new(id("x"), "x", today())),
+                    Err(Error::BadTopic(_))
                 ),
-                "{note}"
+                "{topic}"
             );
         }
         store.add_to("todo", Todo::new(id("a"), "a", today()))?;
@@ -776,7 +830,7 @@ mod tests {
         store.update(&id("a"), |t| t.complete(today()))?;
         store.update(&id("a"), Todo::reopen)?;
         store.update(&id("a"), |t| t.complete(today()))?;
-        let todos = store.todos_by_note(Some("home"))?;
+        let todos = store.todos_by_topic(Some("home"))?;
         assert_eq!(todos.len(), 2);
         let next = &todos[1].1;
         assert_eq!(next.text, "water plants");
@@ -792,7 +846,7 @@ mod tests {
         store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         assert_eq!(store.remove(&id("a"))?.text, "a");
         assert_eq!(store.get(&id("a"))?, None);
-        assert_eq!(store.todos_by_note(None)?, Vec::new());
+        assert_eq!(store.todos_by_topic(None)?, Vec::new());
         assert!(matches!(store.remove(&id("a")), Err(Error::NotFound(_))));
         let rows: i64 = store.conn.query_row(
             "SELECT count(*) FROM todos WHERE deleted_at IS NOT NULL",
@@ -809,7 +863,7 @@ mod tests {
         store.add_to("todo", Todo::new(id("a"), "a", today()))?;
         store.add_to("b", Todo::new(id("b"), "b", today()))?;
         let all = store.changes(0)?;
-        assert_eq!(all.notes.len(), 2);
+        assert_eq!(all.topics.len(), 2);
         let ids: Vec<&str> = all.todos.iter().map(|c| c.todo.id.0.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
         assert_eq!(store.changes(all.cursor)?.todos, []);
@@ -820,14 +874,14 @@ mod tests {
         store.update(&id("a"), |_| {})?;
         let next = store.changes(all.cursor)?;
         assert!(next.cursor > all.cursor);
-        assert_eq!(next.notes, []);
+        assert_eq!(next.topics, []);
         let changed: Vec<(&str, &str, bool)> = next
             .todos
             .iter()
             .map(|c| (c.todo.id.0.as_str(), c.todo.text.as_str(), c.deleted))
             .collect();
         assert_eq!(changed, [("a", "a2", false), ("b", "b", true)]);
-        assert_eq!(next.todos[1].note, "b");
+        assert_eq!(next.todos[1].topic, "b");
         assert!(store.is_deleted(&id("b"))?);
         assert!(!store.is_deleted(&id("a"))?);
         assert_eq!(store.changes(next.cursor)?.todos, []);
@@ -862,12 +916,12 @@ mod tests {
         assert_eq!(
             first,
             Imported {
-                notes: 3,
+                topics: 3,
                 added: 4,
                 skipped: 0
             }
         );
-        assert_eq!(store.notes()?, ["empty", "projects/dev", "todo"]);
+        assert_eq!(store.topics()?, ["empty", "projects/dev", "todo"]);
         let a = store.get(&id("aaaaaa"))?.expect("a");
         assert_eq!(a.due, NaiveDate::from_ymd_opt(2026, 10, 30));
         assert_eq!(a.tags, ["dev"]);
@@ -881,12 +935,12 @@ mod tests {
         assert_eq!(
             again,
             Imported {
-                notes: 3,
+                topics: 3,
                 added: 0,
                 skipped: 4
             }
         );
-        assert_eq!(store.todos_by_note(None)?.len(), 4);
+        assert_eq!(store.todos_by_topic(None)?.len(), 4);
         Ok(())
     }
 }

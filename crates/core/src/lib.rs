@@ -234,17 +234,17 @@ impl Todo {
 pub struct Changes {
     /// Send it as `since` next time to get only what changed after this.
     pub cursor: u64,
-    /// Notes created or deleted since.
+    /// Topics created or deleted since.
     #[serde(default)]
-    pub notes: Vec<NoteChange>,
+    pub topics: Vec<TopicChange>,
     /// Todos added, changed or deleted since.
     #[serde(default)]
     pub todos: Vec<TodoChange>,
 }
 
-/// A note in [`Changes`].
+/// A topic in [`Changes`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NoteChange {
+pub struct TopicChange {
     /// Like `projects/dev`.
     pub name: String,
     /// Gone: forget it.
@@ -255,8 +255,8 @@ pub struct NoteChange {
 /// A todo in [`Changes`], as it is now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoChange {
-    /// The note it's in.
-    pub note: String,
+    /// The topic it's in.
+    pub topic: String,
     /// Gone: forget it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deleted: bool,
