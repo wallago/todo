@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { dueCount, showBadge } from "./badge";
+import { updateBadge } from "./badge";
 import { DuePage, PinnedPage, TopicPage, TopicsPage } from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
@@ -45,7 +45,7 @@ export function App({ store }: { store: Store }) {
   const [settings, setSettings] = useState(!token);
   useAutoSync(store);
   // Every sync and local change makes a new copy, so the icon follows both.
-  useEffect(() => void showBadge(dueCount(replica.todos, isoDate())), [replica]);
+  useEffect(() => void updateBadge(replica.todos, isoDate()), [replica]);
   const tab = tabOf(route);
   useSwipe(
     (step) => {
@@ -161,6 +161,7 @@ export function App({ store }: { store: Store }) {
             setSettings(false);
           }}
           onClose={() => setSettings(false)}
+          onNotify={() => void updateBadge(replica.todos, isoDate())}
         />
       )}
     </>
