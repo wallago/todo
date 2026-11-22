@@ -106,6 +106,21 @@ describe("App", () => {
     await swipe(100, 300, "Due");
   });
 
+  test("the Topics page sums up every topic", () => {
+    const store = new Store(
+      storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", isoDate(-1)) }),
+      offline,
+    );
+    window.location.hash = "#/topics";
+    render(<App store={store} />);
+    const summary = screen.getByRole("region", { name: "Summary" });
+    expect(within(summary).getByText("Late").nextSibling?.textContent).toBe("1");
+    expect(within(summary).getByText("Open").nextSibling?.textContent).toBe("1");
+    expect(within(summary).getByText("0/1 done")).toBeDefined();
+    const topic = screen.getByRole("link", { name: /projects\/demo/ });
+    expect(topic.querySelector(".count")?.textContent).toBe("1 open · 1 late");
+  });
+
   test("ticking a todo moves it to done", () => {
     const store = new Store(
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),

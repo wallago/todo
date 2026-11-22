@@ -193,20 +193,83 @@ li.todo.in_progress .text::before {
   color: var(--warn);
 }
 
+.summary {
+  margin: 12px 0 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent-bis);
+  border-radius: 12px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tile span {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.tile strong {
+  font-size: 24px;
+}
+
+.done {
+  color: var(--accent);
+}
+
+.progress {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent-bis);
+  overflow: hidden;
+}
+
+.progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.summary .ratio {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  text-align: right;
+  color: var(--muted);
+}
+
 li.topic a {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: 6px 12px;
   padding: 12px 0;
   border-bottom: 1px solid var(--panel);
   color: var(--text);
   text-decoration: none;
+}
+
+li.topic .name {
+  flex: 1;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
 li.topic .count {
   flex: none;
-  margin-left: 12px;
   color: var(--muted);
+}
+
+li.topic .progress {
+  flex-basis: 100%;
 }
 
 .empty {
