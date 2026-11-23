@@ -28,7 +28,7 @@ function TodoList({ entries, showTopic, onToggle, onOpen }: ListProps) {
 
 type PageProps = Omit<ListProps, "entries" | "showTopic"> & { todos: Entry[] };
 
-/** Late, today, then this week: every open todo due by Sunday. */
+/** Late, today, this week, then later: every open todo with a due date. */
 export function DuePage({ todos, ...list }: PageProps) {
   const today = isoDate();
   const sunday = endOfWeek();
@@ -37,10 +37,11 @@ export function DuePage({ todos, ...list }: PageProps) {
     ["Late", open.filter((e) => e.todo.due && e.todo.due < today)],
     ["Today", open.filter((e) => e.todo.due === today)],
     ["This week", open.filter((e) => e.todo.due && e.todo.due > today && e.todo.due <= sunday)],
+    ["Later", open.filter((e) => e.todo.due && e.todo.due > sunday)],
   ];
   const shown = sections.filter(([, entries]) => entries.length > 0);
   if (shown.length === 0) {
-    return <p className="empty">{todos.length ? "Nothing due this week." : "No todos yet."}</p>;
+    return <p className="empty">{todos.length ? "Nothing due." : "No todos yet."}</p>;
   }
   return shown.map(([title, entries]) => (
     <section key={title}>
