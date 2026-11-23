@@ -1,0 +1,62 @@
+//! The manager page: one topic's todos.
+
+use chrono::NaiveDate;
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::Style,
+    text::{Line, Span},
+};
+use todo_client::Todo;
+
+use super::{due_style, list, marks, pane};
+use crate::tui::{
+    state::Manager,
+    theme::{ACCENT, ACCENT_BIS, PRIMARY, SECONDARY},
+};
+
+/// The open topic's todos, with `spinner` after the title while they reload.
+pub(super) fn render(
+    manager: &mut Manager,
+    today: NaiveDate,
+    spinner: Option<&str>,
+    focused: bool,
+    frame: &mut Frame,
+    rect: Rect,
+) {
+    let mut title = manager.topic.as_deref().unwrap_or("no topic").to_owned();
+    if let Some(spinner) = spinner {
+        title = format!("{title} {spinner}");
+    }
+    let todos = list(
+        manager.todos.iter().map(|todo| row(todo, today)),
+        pane(&title, focused),
+    )
+    // Rows colour themselves; the selection only adds a background.
+    .highlight_style(Style::new().bg(ACCENT_BIS).bold());
+    frame.render_stateful_widget(todos, rect, &mut manager.list);
+}
+
+/// `[ ] text 📌 🔁 ⏫ 2026-11-02`, dimmed once closed.
+fn row(todo: &Todo, today: NaiveDate) -> Line<'_> {
+    let text = if todo.status.is_closed() {
+        SECONDARY
+    } else {
+        PRIMARY
+    };
+    let mut spans = vec![
+        Span::styled(format!("[{}] ", todo.status.as_char()), ACCENT),
+        Span::styled(todo.text.as_str(), text),
+    ];
+    spans.extend(marks(todo));
+    if let Some(emoji) = todo.priority.emoji() {
+        spans.push(Span::raw(format!(" {emoji}")));
+    }
+    if let Some(due) = todo.due {
+        spans.push(Span::styled(format!(" {due}"), due_style(todo, today)));
+    }
+    for tag in &todo.tags {
+        spans.push(Span::styled(format!(" #{tag}"), text));
+    }
+    Line::from(spans)
+}

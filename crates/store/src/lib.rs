@@ -1,21 +1,26 @@
-//! Owns the vault: loads every note, finds todos by id, writes changes back.
+//! Owns the todo database: one SQLite file with topics and todos.
 //!
-//! Every write re-reads its note first, so an edit made in Obsidian since the
-//! last load is kept, not overwritten.
+//! A topic is a subject (a project, a trip...) named like a path,
+//! `projects/todo/main.md`. Deleting a todo only marks it deleted
+//! (`deleted_at`), so offline clients can learn about it later.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::hash::{BuildHasher, RandomState};
-use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::io;
+use std::path::{Path, PathBuf};
 
-use todo_core::{Id, Todo};
-use todo_md::Document;
+use chrono::{DateTime, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use serde::{Serialize, de::DeserializeOwned};
+use todo_core::{Changes, Id, Recur, Status, Todo, TodoChange, TopicChange};
+use uuid::Uuid;
 
 /// What can go wrong in the store.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Reading or writing a file failed.
+    /// The database refused or failed.
+    #[error("database: {0}")]
+    Db(#[from] rusqlite::Error),
+    /// Reading a vault file failed (import only).
     #[error("{}: {source}", path.display())]
     Io {
         /// The file.
@@ -23,249 +28,590 @@ pub enum Error {
         /// What went wrong.
         source: io::Error,
     },
-    /// The change was refused: unknown id, id already taken...
-    #[error(transparent)]
-    Md(#[from] todo_md::Error),
-    /// The path is not a `.md` note inside the vault.
-    #[error("`{}` is not a note in the vault: give a relative path to a .md file, like `projects/dev.md`", .0.display())]
-    BadNote(PathBuf),
+    /// No todo has this id.
+    #[error("no todo with id `{}`", .0.0)]
+    NotFound(Id),
+    /// Another todo, maybe a deleted one, already has this id.
+    #[error("id `{}` is already used", .0.0)]
+    DuplicateId(Id),
+    /// The topic name is not a relative `.md` path.
+    #[error("`{0}` is not a topic name: give a path like `projects/dev`")]
+    BadTopic(String),
 }
 
 /// Shorthand for the store's results.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Every note of a vault, kept in memory.
+/// Schema changes, in order. `PRAGMA user_version` counts those applied.
+/// Only ever append: a deployed database already ran the old ones.
+const MIGRATIONS: &[&str] = &[
+    r"
+-- Sync: every insert or change takes the next number of one counter (see
+-- the triggers), so a client asks for `version > cursor` without trusting
+-- any clock.
+CREATE TABLE sync_counter (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL
+);
+INSERT INTO sync_counter (id, version) VALUES (1, 0);
+
+CREATE TABLE notes (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    version    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE todos (
+    id         TEXT PRIMARY KEY,
+    note_id    TEXT NOT NULL REFERENCES notes(id),
+    text       TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
+    priority   TEXT NOT NULL CHECK (priority IN ('lowest', 'low', 'normal', 'medium', 'high', 'highest')),
+    due        TEXT,
+    done       TEXT,
+    tags       TEXT NOT NULL DEFAULT '[]',
+    pinned     INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+    recur      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    version    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX todos_note_id ON todos(note_id);
+CREATE INDEX notes_version ON notes(version);
+CREATE INDEX todos_version ON todos(version);
+
+CREATE TRIGGER notes_version_insert AFTER INSERT ON notes BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE notes SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER notes_version_update AFTER UPDATE OF name, deleted_at ON notes BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE notes SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER todos_version_insert AFTER INSERT ON todos BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER todos_version_update AFTER UPDATE OF
+    note_id, text, status, priority, due, done, tags, pinned, recur, deleted_at ON todos
+BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+",
+    r"
+-- Notes are called topics now. Renaming keeps every reference, the triggers'
+-- included; the indexes and triggers are then remade under the new names.
+ALTER TABLE notes RENAME TO topics;
+ALTER TABLE todos RENAME COLUMN note_id TO topic_id;
+
+DROP INDEX todos_note_id;
+DROP INDEX notes_version;
+CREATE INDEX todos_topic_id ON todos(topic_id);
+CREATE INDEX topics_version ON topics(version);
+
+DROP TRIGGER notes_version_insert;
+DROP TRIGGER notes_version_update;
+DROP TRIGGER todos_version_update;
+CREATE TRIGGER topics_version_insert AFTER INSERT ON topics BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE topics SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER topics_version_update AFTER UPDATE OF name, deleted_at ON topics BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE topics SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+CREATE TRIGGER todos_version_update AFTER UPDATE OF
+    topic_id, text, status, priority, due, done, tags, pinned, recur, deleted_at ON todos
+BEGIN
+    UPDATE sync_counter SET version = version + 1;
+    UPDATE todos SET version = (SELECT version FROM sync_counter) WHERE id = NEW.id;
+END;
+",
+];
+/// Columns read into a [`Todo`] by [`read_todo`]; column 8 is its topic's name.
+const TODO_COLUMNS: &str = "t.id, t.text, t.status, t.priority, t.due, t.done, t.tags, \
+    t.created_at, n.name, t.pinned, t.recur";
+
+/// The todo database.
 #[derive(Debug)]
 pub struct Store {
-    /// Vault folder.
-    root: PathBuf,
-    /// Note that new todos go to, relative to `root`.
-    inbox: PathBuf,
-    /// Every note, by path relative to `root`.
-    notes: BTreeMap<PathBuf, Document>,
-    /// Which note holds each todo.
-    index: HashMap<Id, PathBuf>,
+    /// Open connection.
+    conn: Connection,
 }
 
 impl Store {
-    /// Loads every `.md` note under `root`, skipping hidden folders like
-    /// `.obsidian`. New todos go to `inbox`, a path relative to `root`.
-    ///
-    /// Tasks without an id get one, written to their note, so every todo can
-    /// be addressed.
+    /// Opens the database file, creating it and its tables if missing.
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] if the folder or a note can't be read or written.
-    pub fn open(root: impl Into<PathBuf>, inbox: impl Into<PathBuf>) -> Result<Self> {
-        let mut store = Self {
-            root: root.into(),
-            inbox: inbox.into(),
-            notes: BTreeMap::new(),
-            index: HashMap::new(),
-        };
-        let mut paths = Vec::new();
-        find_notes(&store.root, Path::new(""), &mut paths)?;
-        paths.sort();
-        for path in paths {
-            store.reload(&path)?;
+    /// [`Error::Db`] if the file can't be opened or migrated.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            fs::create_dir_all(dir).map_err(|source| Error::Io {
+                path: dir.to_owned(),
+                source,
+            })?;
         }
-        Ok(store)
+        let conn = Connection::open(path)?;
+        // WAL lets `todo-server import` write while the server reads.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        Self::setup(conn)
     }
 
-    /// Loads the whole vault again, e.g. after notes were added, renamed or
-    /// deleted outside the server. Keeps the old notes if it fails.
+    /// A database in memory, for tests.
     ///
     /// # Errors
     ///
     /// As [`Store::open`].
-    pub fn rescan(&mut self) -> Result<()> {
-        *self = Self::open(self.root.clone(), self.inbox.clone())?;
-        Ok(())
+    pub fn open_in_memory() -> Result<Self> {
+        Self::setup(Connection::open_in_memory()?)
     }
 
-    /// Every todo, note by note.
-    pub fn todos(&self) -> impl Iterator<Item = &Todo> {
-        self.notes.values().flat_map(Document::todos)
+    /// Settings and migrations shared by both `open`s.
+    fn setup(mut conn: Connection) -> Result<Self> {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        migrate(&mut conn)?;
+        Ok(Self { conn })
     }
 
-    /// Every todo with its note's path, relative to the vault.
-    pub fn todos_by_note(&self) -> impl Iterator<Item = (&Path, &Todo)> {
-        self.notes
-            .iter()
-            .flat_map(|(path, doc)| doc.todos().map(move |todo| (path.as_path(), todo)))
-    }
-
-    /// Every note's path, relative to the vault, todos or not.
-    pub fn notes(&self) -> impl Iterator<Item = &Path> {
-        self.notes.keys().map(PathBuf::as_path)
-    }
-
-    /// The todo with this id.
-    #[must_use]
-    pub fn get(&self, id: &Id) -> Option<&Todo> {
-        self.notes.get(self.index.get(id)?)?.get(id)
-    }
-
-    /// Adds a todo to the inbox note, giving it an id if it has none.
-    /// Returns it as saved.
+    /// Every todo with its topic's name, topic by topic, in the order they were
+    /// added. Only those of `topic` if given.
     ///
     /// # Errors
     ///
-    /// [`Error::Md`] if its id is already used, [`Error::Io`] if the inbox
-    /// can't be read or written.
-    pub fn add(&mut self, todo: Todo) -> Result<Todo> {
-        let inbox = self.inbox.clone();
-        self.insert(&inbox, todo)
+    /// [`Error::Db`] if the query fails.
+    pub fn todos_by_topic(&self, topic: Option<&str>) -> Result<Vec<(String, Todo)>> {
+        let sql = format!(
+            "SELECT {TODO_COLUMNS} FROM todos t JOIN topics n ON n.id = t.topic_id
+            WHERE t.deleted_at IS NULL AND (?1 IS NULL OR n.name = ?1)
+            ORDER BY n.name, t.rowid"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        // A bad name matches nothing.
+        let topic = topic.map(|topic| topic_name(topic).unwrap_or_default());
+        let rows = stmt.query_map([topic], |row| Ok((row.get(8)?, read_todo(row)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Adds a todo to `note`, a path relative to the vault, creating the
-    /// note if it is missing. Otherwise like [`Store::add`].
+    /// Every topic's name, todos or not, sorted.
     ///
     /// # Errors
     ///
-    /// [`Error::BadNote`] if `note` is not a `.md` file inside the vault or
-    /// is hidden, then as [`Store::add`].
-    pub fn add_to(&mut self, note: impl AsRef<Path>, todo: Todo) -> Result<Todo> {
-        let note = note.as_ref();
-        check_note(note)?;
-        self.insert(note, todo)
+    /// [`Error::Db`] if the query fails.
+    pub fn topics(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT name FROM topics WHERE deleted_at IS NULL ORDER BY name")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Changes a todo and saves its note. Returns it as saved.
+    /// The todo with this id, unless deleted.
     ///
     /// # Errors
     ///
-    /// [`Error::Md`] if no todo has this id or the change gives it a taken
-    /// id, [`Error::Io`] if its note can't be read or written.
-    pub fn update(&mut self, id: &Id, change: impl FnOnce(&mut Todo)) -> Result<Todo> {
-        let path = self.locate(id)?;
-        self.apply(&path, |doc| doc.update(id, change).cloned())
+    /// [`Error::Db`] if the query fails.
+    pub fn get(&self, id: &Id) -> Result<Option<Todo>> {
+        get(&self.conn, id)
     }
 
-    /// Removes a todo and its line. Returns it.
+    /// Adds a todo to `topic`, creating the topic if it is missing. A todo
+    /// without an id gets a new UUID. Returns it as saved.
     ///
     /// # Errors
     ///
-    /// [`Error::Md`] if no todo has this id, [`Error::Io`] if its note can't
-    /// be read or written.
-    pub fn remove(&mut self, id: &Id) -> Result<Todo> {
-        let path = self.locate(id)?;
-        self.apply(&path, |doc| doc.remove(id))
-    }
-
-    /// Reads one note again, e.g. after it was edited in Obsidian. `path` is
-    /// relative to the vault. A note that no longer exists is dropped.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Io`] if the note can't be read, or its new ids can't be
-    /// written.
-    pub fn reload(&mut self, path: &Path) -> Result<()> {
-        let full = self.root.join(path);
-        let src = match fs::read_to_string(&full) {
-            Ok(src) => src,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                self.set_note(path, None);
-                return Ok(());
-            }
-            Err(source) => return Err(Error::Io { path: full, source }),
-        };
-        let mut doc = Document::parse(&src);
-        if self.fix_ids(path, &mut doc) > 0 {
-            write_note(&full, &doc)?;
-        }
-        self.set_note(path, Some(doc));
-        Ok(())
-    }
-
-    /// Adds a todo to `path`, which the caller trusts.
-    fn insert(&mut self, path: &Path, mut todo: Todo) -> Result<Todo> {
-        self.reload(path)?;
+    /// [`Error::BadTopic`] if `topic` is not a topic name,
+    /// [`Error::DuplicateId`] if its id is taken, [`Error::Db`] on failure.
+    pub fn add_to(&mut self, topic: &str, mut todo: Todo) -> Result<Todo> {
+        let topic = topic_name(topic)?;
         if todo.id.0.is_empty() {
-            todo.id = new_id(&mut self.index.keys().cloned().collect());
+            todo.id = Id(Uuid::now_v7().to_string());
         }
-        self.apply(path, |doc| doc.add(todo.clone()).map(|()| todo))
-    }
-
-    /// Re-reads the note holding `id` and returns its path.
-    fn locate(&mut self, id: &Id) -> Result<PathBuf> {
-        let not_found = || Error::Md(todo_md::Error::NotFound(id.clone()));
-        let path = self.index.get(id).cloned().ok_or_else(not_found)?;
-        self.reload(&path)?;
-        // It may have been deleted in Obsidian meanwhile.
-        match self.index.get(id) {
-            Some(found) if *found == path => Ok(path),
-            _ => Err(not_found()),
+        let now = now();
+        let tx = self.conn.transaction()?;
+        if id_taken(&tx, &todo.id)? {
+            return Err(Error::DuplicateId(todo.id));
         }
+        let topic_id = ensure_topic(&tx, &topic, &now)?;
+        insert(&tx, &topic_id, &todo, &now)?;
+        let saved = get(&tx, &todo.id)?.ok_or_else(|| Error::NotFound(todo.id.clone()))?;
+        tx.commit()?;
+        Ok(saved)
     }
 
-    /// Runs `change` on a copy of a note, saves it, then keeps it.
-    /// Nothing changes if `change` or the write fails.
-    fn apply<T>(
-        &mut self,
-        path: &Path,
-        change: impl FnOnce(&mut Document) -> std::result::Result<T, todo_md::Error>,
-    ) -> Result<T> {
-        // A missing note starts empty.
-        let mut doc = self
-            .notes
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| Document::parse(""));
-        let out = change(&mut doc)?;
-        if let Some(todo) = doc.todos().find(|t| self.in_other_note(&t.id, path)) {
-            return Err(todo_md::Error::DuplicateId(todo.id.clone()).into());
+    /// Changes a todo. Its id can't change. Returns it as saved.
+    ///
+    /// Completing a recurring todo also adds the next one to its topic (see
+    /// [`todo_core::Recur::follow_up`]); the done one stops recurring, so
+    /// reopening and completing it again doesn't add a second copy.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] if no todo has this id, [`Error::Db`] on failure.
+    pub fn update(&mut self, id: &Id, change: impl FnOnce(&mut Todo)) -> Result<Todo> {
+        let now = now();
+        let tx = self.conn.transaction()?;
+        let mut todo = get(&tx, id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
+        let before = todo.clone();
+        change(&mut todo);
+        todo.id = id.clone();
+        let completed = before.status != Status::Done && todo.status == Status::Done;
+        // Only taken on completion: any other edit keeps the recurrence.
+        if let Some(recur) = todo.recur.take_if(|_| completed) {
+            let today = todo.done.unwrap_or_else(|| Local::now().date_naive());
+            let mut next = recur.follow_up(&todo, today);
+            next.id = Id(Uuid::now_v7().to_string());
+            let topic_id: String =
+                tx.query_row("SELECT topic_id FROM todos WHERE id = ?1", [&id.0], |row| {
+                    row.get(0)
+                })?;
+            insert(&tx, &topic_id, &next, &now)?;
         }
-        write_note(&self.root.join(path), &doc)?;
-        self.set_note(path, Some(doc));
-        Ok(out)
-    }
-
-    /// Gives a fresh id to tasks with none, or with one another note already
-    /// uses. Returns how many changed.
-    fn fix_ids(&self, path: &Path, doc: &mut Document) -> usize {
-        let mut taken: HashSet<Id> = self.index.keys().cloned().collect();
-        taken.extend(doc.todos().map(|t| t.id.clone()));
-        let mut changed = doc.ensure_ids(|| new_id(&mut taken));
-        let copies: Vec<Id> = doc
-            .todos()
-            .filter(|t| self.in_other_note(&t.id, path))
-            .map(|t| t.id.clone())
-            .collect();
-        for id in copies {
-            let fresh = new_id(&mut taken);
-            if doc.update(&id, |t| t.id = fresh).is_ok() {
-                changed += 1;
-            }
+        if todo != before {
+            tx.execute(
+                "UPDATE todos SET text = ?2, status = ?3, priority = ?4, due = ?5,
+                done = ?6, tags = ?7, pinned = ?8, recur = ?9, updated_at = ?10 WHERE id = ?1",
+                params![
+                    todo.id.0,
+                    todo.text,
+                    to_sql(todo.status),
+                    to_sql(todo.priority),
+                    todo.due,
+                    todo.done,
+                    tags_to_sql(&todo.tags),
+                    todo.pinned,
+                    recur_to_sql(todo.recur),
+                    now,
+                ],
+            )?;
         }
-        changed
+        tx.commit()?;
+        Ok(todo)
     }
 
-    /// `true` if a note other than `path` holds this id.
-    fn in_other_note(&self, id: &Id, path: &Path) -> bool {
-        self.index.get(id).is_some_and(|found| found != path)
+    /// Marks a todo deleted. Returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] if no todo has this id, [`Error::Db`] on failure.
+    pub fn remove(&mut self, id: &Id) -> Result<Todo> {
+        let tx = self.conn.transaction()?;
+        let todo = get(&tx, id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
+        let now = now();
+        tx.execute(
+            "UPDATE todos SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1",
+            params![id.0, now],
+        )?;
+        tx.commit()?;
+        Ok(todo)
     }
 
-    /// Keeps a note in memory, or drops it, and updates the index.
-    fn set_note(&mut self, path: &Path, doc: Option<Document>) {
-        self.index.retain(|_, found| found != path);
-        match doc {
-            Some(doc) => {
-                for todo in doc.todos() {
-                    self.index.insert(todo.id.clone(), path.to_owned());
+    /// Every topic and todo changed after `since` (a cursor from an earlier
+    /// call, or 0 for everything), deleted ones included, and the cursor to
+    /// send next time.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] if a query fails.
+    pub fn changes(&mut self, since: u64) -> Result<Changes> {
+        let since = i64::try_from(since).unwrap_or(i64::MAX);
+        // One read transaction: the cursor matches the rows exactly.
+        let tx = self.conn.transaction()?;
+        let cursor: i64 = tx.query_row("SELECT version FROM sync_counter", [], |row| row.get(0))?;
+        let topics = tx
+            .prepare_cached(
+                "SELECT name, deleted_at IS NOT NULL FROM topics WHERE version > ?1 ORDER BY name",
+            )?
+            .query_map([since], |row| {
+                Ok(TopicChange {
+                    name: row.get(0)?,
+                    deleted: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let sql = format!(
+            "SELECT {TODO_COLUMNS}, t.deleted_at IS NOT NULL FROM todos t
+            JOIN topics n ON n.id = t.topic_id
+            WHERE t.version > ?1 ORDER BY t.version"
+        );
+        let todos = tx
+            .prepare_cached(&sql)?
+            .query_map([since], |row| {
+                Ok(TodoChange {
+                    topic: row.get(8)?,
+                    deleted: row.get(11)?,
+                    todo: read_todo(row)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        tx.commit()?;
+        Ok(Changes {
+            cursor: u64::try_from(cursor).unwrap_or(0),
+            topics,
+            todos,
+        })
+    }
+
+    /// `true` if a todo with this id was deleted.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] if the query fails.
+    pub fn is_deleted(&self, id: &Id) -> Result<bool> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT 1 FROM todos WHERE id = ?1 AND deleted_at IS NOT NULL")?
+            .exists([&id.0])?)
+    }
+
+    /// Copies every todo of an Obsidian vault into the database, in one
+    /// transaction. Never writes to the vault.
+    ///
+    /// Safe to run again: todos whose id is already in the database are
+    /// skipped. A task without a `^id` gets one made from its topic, line
+    /// position and text, so it is skipped the next time too.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the vault can't be read, [`Error::Db`] on failure.
+    /// Nothing is imported then.
+    pub fn import_vault(&mut self, root: &Path) -> Result<Imported> {
+        let mut paths = Vec::new();
+        find_notes(root, Path::new(""), &mut paths)?;
+        paths.sort();
+        let mut report = Imported::default();
+        let now = now();
+        let tx = self.conn.transaction()?;
+        for path in paths {
+            let full = root.join(&path);
+            let src =
+                fs::read_to_string(&full).map_err(|source| Error::Io { path: full, source })?;
+            let topic = path
+                .with_extension("")
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            let topic_id = ensure_topic(&tx, &topic, &now)?;
+            report.topics += 1;
+            for (n, mut todo) in todo_md::parse_note(&src).into_iter().enumerate() {
+                if todo.id.0.is_empty() {
+                    let seed = format!("{topic}\n{n}\n{}", todo.text);
+                    todo.id = Id(Uuid::new_v5(&Uuid::NAMESPACE_OID, seed.as_bytes()).to_string());
                 }
-                self.notes.insert(path.to_owned(), doc);
+                if id_taken(&tx, &todo.id)? {
+                    report.skipped += 1;
+                } else {
+                    insert(&tx, &topic_id, &todo, &now)?;
+                    report.added += 1;
+                }
             }
-            None => {
-                self.notes.remove(path);
-            }
+        }
+        tx.commit()?;
+        Ok(report)
+    }
+}
+
+/// What [`Store::import_vault`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Imported {
+    /// Topics read.
+    pub topics: usize,
+    /// Todos added.
+    pub added: usize,
+    /// Todos skipped because their id was already in the database.
+    pub skipped: usize,
+}
+
+/// Runs the migrations this database hasn't run yet.
+fn migrate(conn: &mut Connection) -> Result<()> {
+    let done: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let tx = conn.transaction()?;
+    for (n, sql) in (1_i64..).zip(MIGRATIONS).skip_while(|&(n, _)| n <= done) {
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", n)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// The todo with this id, unless deleted.
+fn get(conn: &Connection, id: &Id) -> Result<Option<Todo>> {
+    let sql = format!(
+        "SELECT {TODO_COLUMNS} FROM todos t JOIN topics n ON n.id = t.topic_id
+        WHERE t.id = ?1 AND t.deleted_at IS NULL"
+    );
+    Ok(conn
+        .prepare_cached(&sql)?
+        .query_row([&id.0], read_todo)
+        .optional()?)
+}
+
+/// `true` if any todo, deleted ones too, has this id.
+fn id_taken(tx: &Transaction<'_>, id: &Id) -> Result<bool> {
+    Ok(tx
+        .prepare_cached("SELECT 1 FROM todos WHERE id = ?1")?
+        .exists([&id.0])?)
+}
+
+/// The id of the topic with this name, created (or undeleted) if needed.
+fn ensure_topic(tx: &Transaction<'_>, name: &str, now: &str) -> Result<String> {
+    let found: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT id, deleted_at FROM topics WHERE name = ?1",
+            [name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    match found {
+        Some((id, None)) => Ok(id),
+        Some((id, Some(_))) => {
+            tx.execute(
+                "UPDATE topics SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1",
+                params![id, now],
+            )?;
+            Ok(id)
+        }
+        None => {
+            let id = Uuid::now_v7().to_string();
+            tx.execute(
+                "INSERT INTO topics (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                params![id, name, now],
+            )?;
+            Ok(id)
         }
     }
 }
 
+/// Inserts a todo. Its created date, if any, becomes `created_at`.
+fn insert(tx: &Transaction<'_>, topic_id: &str, todo: &Todo, now: &str) -> Result<()> {
+    let created_at = todo.created.map_or_else(|| now.to_owned(), local_midnight);
+    tx.execute(
+        "INSERT INTO todos (id, topic_id, text, status, priority, due, done, tags, pinned, recur,
+                            created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            todo.id.0,
+            topic_id,
+            todo.text,
+            to_sql(todo.status),
+            to_sql(todo.priority),
+            todo.due,
+            todo.done,
+            tags_to_sql(&todo.tags),
+            todo.pinned,
+            recur_to_sql(todo.recur),
+            created_at,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Reads [`TODO_COLUMNS`] into a todo.
+fn read_todo(row: &Row<'_>) -> rusqlite::Result<Todo> {
+    let created_at: String = row.get(7)?;
+    let tags: String = row.get(6)?;
+    let recur: Option<String> = row.get(10)?;
+    Ok(Todo {
+        id: Id(row.get(0)?),
+        text: row.get(1)?,
+        status: from_sql(row, 2)?,
+        priority: from_sql(row, 3)?,
+        due: row.get(4)?,
+        done: row.get(5)?,
+        tags: serde_json::from_str(&tags).map_err(|e| bad_column(6, e))?,
+        created: Some(
+            DateTime::parse_from_rfc3339(&created_at)
+                .map_err(|e| bad_column(7, e))?
+                .with_timezone(&Local)
+                .date_naive(),
+        ),
+        pinned: row.get(9)?,
+        recur: recur
+            .map(|recur| serde_json::from_str(&recur))
+            .transpose()
+            .map_err(|e| bad_column(10, e))?,
+    })
+}
+
+/// A recurrence as JSON, like `{"every":2,"unit":"week"}`.
+fn recur_to_sql(recur: Option<Recur>) -> Option<String> {
+    recur.and_then(|recur| serde_json::to_string(&recur).ok())
+}
+
+/// A unit enum as its serde name, like `in_progress`.
+fn to_sql(value: impl Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => String::new(),
+    }
+}
+
+/// Reverse of [`to_sql`].
+fn from_sql<T: DeserializeOwned>(row: &Row<'_>, column: usize) -> rusqlite::Result<T> {
+    let name: String = row.get(column)?;
+    serde_json::from_value(serde_json::Value::String(name)).map_err(|e| bad_column(column, e))
+}
+
+/// Tags as a JSON list.
+fn tags_to_sql(tags: &[String]) -> String {
+    serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_owned())
+}
+
+/// A column that holds something we can't read.
+fn bad_column(
+    column: usize,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
+}
+
+/// Now, as stored: RFC 3339 in UTC with milliseconds, so it sorts as text.
+fn now() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// Midnight of `date` in the server's time zone, as stored.
+fn local_midnight(date: NaiveDate) -> String {
+    let local = Local
+        .from_local_datetime(&date.and_time(chrono::NaiveTime::MIN))
+        .earliest()
+        .map_or_else(
+            || date.and_time(chrono::NaiveTime::MIN).and_utc(),
+            |t| t.with_timezone(&Utc),
+        );
+    local.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// A topic's name as stored: `/`-separated parts like `projects/dev`, none
+/// empty or starting with `.`. A trailing `.md` is dropped, so the old vault
+/// paths still find their topic.
+fn topic_name(topic: &str) -> Result<String> {
+    let name = topic.trim();
+    let name = name.strip_suffix(".md").unwrap_or(name);
+    let clean = !name.is_empty()
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && part.trim() == part
+                && !part.starts_with('.')
+                && !part.contains(['\\', '\n', '\r'])
+        });
+    if clean {
+        Ok(name.to_owned())
+    } else {
+        Err(Error::BadTopic(topic.to_owned()))
+    }
+}
+
 /// Collects `.md` files under `root/dir` as paths relative to `root`.
-/// Skips hidden entries (`.obsidian`, `.trash`, our temp files) and symlinks.
+/// Skips hidden entries (`.obsidian`, `.trash`) and symlinks.
 fn find_notes(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     let full = root.join(dir);
     let io_err = |source| Error::Io {
@@ -289,82 +635,12 @@ fn find_notes(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Refuses paths that leave the vault, hidden ones (`.obsidian`), and
-/// files that are not `.md`, the same notes [`find_notes`] would skip.
-fn check_note(note: &Path) -> Result<()> {
-    let inside = note.components().all(|part| match part {
-        Component::Normal(name) => !name.to_string_lossy().starts_with('.'),
-        _ => false,
-    });
-    if inside && note.extension().is_some_and(|ext| ext == "md") {
-        Ok(())
-    } else {
-        Err(Error::BadNote(note.to_owned()))
-    }
-}
-
-/// Writes a note to a temp file then renames it over the old one, so a crash
-/// never leaves half a note.
-fn write_note(path: &Path, doc: &Document) -> Result<()> {
-    let io_err = |source| Error::Io {
-        path: path.to_owned(),
-        source,
-    };
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(io_err)?;
-    }
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = path.with_file_name(format!(".{name}.tmp"));
-    let mut file = fs::File::create(&tmp).map_err(io_err)?;
-    file.write_all(doc.to_string().as_bytes()).map_err(io_err)?;
-    file.sync_all().map_err(io_err)?;
-    fs::rename(&tmp, path).map_err(io_err)
-}
-
-/// Characters used in ids.
-const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-
-/// A random 6-character id not in `taken`; it is added to `taken`.
-fn new_id(taken: &mut HashSet<Id>) -> Id {
-    loop {
-        let mut n = RandomState::new().hash_one(taken.len());
-        let id: String = (0..6)
-            .map(|_| {
-                let c = ALPHABET[usize::try_from(n % 36).unwrap_or_default()];
-                n /= 36;
-                char::from(c)
-            })
-            .collect();
-        let id = Id(id);
-        if taken.insert(id.clone()) {
-            return id;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
+    use todo_core::{Priority, Unit};
 
     use super::*;
-
-    /// A temp vault holding `files` as (path, content).
-    fn vault(files: &[(&str, &str)]) -> TempDir {
-        let dir = tempfile::tempdir().expect("temp dir");
-        for (path, content) in files {
-            let path = dir.path().join(path);
-            fs::create_dir_all(path.parent().expect("has a parent")).expect("mkdir");
-            fs::write(path, content).expect("write");
-        }
-        dir
-    }
-
-    /// A note's content on disk.
-    fn read(dir: &TempDir, path: &str) -> String {
-        fs::read_to_string(dir.path().join(path)).expect("read")
-    }
 
     /// Shorthand for ids.
     fn id(s: &str) -> Id {
@@ -376,178 +652,295 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 10, 25).unwrap_or_default()
     }
 
-    #[test]
-    fn loads_notes_and_skips_hidden_and_other_files() -> Result<()> {
-        let dir = vault(&[
-            ("todo.md", "- [ ] a ^aaaaaa\n"),
-            ("projects/dev.md", "- [ ] b ^bbbbbb\n"),
-            (".obsidian/plugin.md", "- [ ] hidden ^cccccc\n"),
-            ("notes.txt", "- [ ] not markdown ^dddddd\n"),
-        ]);
-        let store = Store::open(dir.path(), "todo.md")?;
-        let ids: Vec<&str> = store.todos().map(|t| t.id.0.as_str()).collect();
-        assert_eq!(ids, ["bbbbbb", "aaaaaa"]);
-        let notes: Vec<&Path> = store.notes().collect();
-        assert_eq!(notes, [Path::new("projects/dev.md"), Path::new("todo.md")]);
-        let (note, todo) = store.todos_by_note().next().expect("a todo");
-        assert_eq!(
-            (note, todo.text.as_str()),
-            (Path::new("projects/dev.md"), "b")
-        );
-        assert_eq!(store.get(&id("bbbbbb")).map(|t| t.text.as_str()), Some("b"));
-        Ok(())
+    /// An empty store.
+    fn store() -> Store {
+        Store::open_in_memory().expect("store")
     }
 
     #[test]
-    fn missing_ids_are_written_to_the_note() -> Result<()> {
-        let dir = vault(&[("todo.md", "# Todo\n\n- [ ] no id\n- [ ] has id ^aaaaaa\n")]);
-        let store = Store::open(dir.path(), "todo.md")?;
-        let new = store.todos().next().expect("a todo");
-        assert_eq!(new.id.0.len(), 6);
-        assert_eq!(
-            read(&dir, "todo.md"),
-            format!(
-                "# Todo\n\n- [ ] no id ^{}\n- [ ] has id ^aaaaaa\n",
-                new.id.0
-            )
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn copy_in_another_note_gets_a_new_id() -> Result<()> {
-        let dir = vault(&[
-            ("a.md", "- [ ] first ^aaaaaa\n"),
-            ("b.md", "- [ ] copy ^aaaaaa\n"),
-        ]);
-        let store = Store::open(dir.path(), "a.md")?;
-        // a.md loads first, so it keeps the id.
-        assert_eq!(
-            store.get(&id("aaaaaa")).map(|t| t.text.as_str()),
-            Some("first")
-        );
-        assert_eq!(read(&dir, "a.md"), "- [ ] first ^aaaaaa\n");
-        // The copy in b.md gets a new one, saved to the note.
-        let copy = store.todos().find(|t| t.text == "copy").expect("copy");
-        assert_ne!(copy.id, id("aaaaaa"));
-        assert_eq!(read(&dir, "b.md"), format!("- [ ] copy ^{}\n", copy.id.0));
-        Ok(())
-    }
-
-    #[test]
-    fn add_goes_to_the_inbox_and_creates_it() -> Result<()> {
-        let dir = vault(&[("other.md", "- [ ] x ^aaaaaa\n")]);
-        let mut store = Store::open(dir.path(), "inbox/todo.md")?;
-        let todo = store.add(Todo::new(Id(String::new()), "buy milk", today()))?;
-        assert_eq!(todo.id.0.len(), 6);
-        assert_eq!(
-            read(&dir, "inbox/todo.md"),
-            format!("- [ ] buy milk ➕ 2026-10-25 ^{}\n", todo.id.0)
-        );
-        assert_eq!(store.get(&todo.id), Some(&todo));
-        Ok(())
-    }
-
-    #[test]
-    fn add_to_another_note_creates_it() -> Result<()> {
-        let dir = vault(&[("todo.md", "- [ ] x ^aaaaaa\n")]);
-        let mut store = Store::open(dir.path(), "todo.md")?;
-        let todo = store.add_to(
-            "projects/dev.md",
-            Todo::new(Id(String::new()), "ship it", today()),
+    fn a_database_from_before_topics_keeps_its_notes() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(MIGRATIONS[0])?;
+        conn.pragma_update(None, "user_version", 1)?;
+        conn.execute_batch(
+            "INSERT INTO notes (id, name, created_at, updated_at) VALUES ('n', 'home', 'x', 'x');
+            INSERT INTO todos (id, note_id, text, status, priority, created_at, updated_at)
+            VALUES ('a', 'n', 'water plants', 'todo', 'normal', '2026-10-25T00:00:00Z', 'x');",
         )?;
+        let mut store = Store::setup(conn)?;
+        assert_eq!(store.topics()?, ["home"]);
+        assert_eq!(store.todos_by_topic(Some("home"))?.len(), 1);
+        let before = store.changes(0)?.cursor;
+        store.add_to("home", Todo::new(id("b"), "repot", today()))?;
         assert_eq!(
-            read(&dir, "projects/dev.md"),
-            format!("- [ ] ship it ➕ 2026-10-25 ^{}\n", todo.id.0)
+            store.changes(before)?.todos.len(),
+            1,
+            "the sync counter still runs"
         );
-        assert_eq!(read(&dir, "todo.md"), "- [ ] x ^aaaaaa\n");
-        assert_eq!(store.get(&todo.id), Some(&todo));
+        Ok(())
+    }
+
+    /// A temp vault holding `files` as (path, content).
+    fn vault(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for (path, content) in files {
+            let path = dir.path().join(path);
+            fs::create_dir_all(path.parent().expect("has a parent")).expect("mkdir");
+            fs::write(path, content).expect("write");
+        }
+        dir
+    }
+
+    #[test]
+    fn add_gives_a_uuid_and_round_trips_every_field() -> Result<()> {
+        let mut store = store();
+        let mut todo = Todo::new(Id(String::new()), "buy milk", today());
+        todo.priority = Priority::High;
+        todo.due = NaiveDate::from_ymd_opt(2026, 10, 30);
+        todo.tags = vec!["errand".into(), "dev/rust".into()];
+        let saved = store.add_to("todo", todo.clone())?;
+        assert!(Uuid::parse_str(&saved.id.0).is_ok(), "{}", saved.id.0);
+        todo.id = saved.id.clone();
+        assert_eq!(saved, todo);
+        assert_eq!(store.get(&saved.id)?, Some(todo));
+        assert_eq!(store.topics()?, ["todo"]);
         Ok(())
     }
 
     #[test]
-    fn add_to_refuses_notes_outside_the_vault() -> Result<()> {
-        let dir = vault(&[("todo.md", "")]);
-        let mut store = Store::open(dir.path(), "todo.md")?;
-        for note in [
-            "../out.md",
-            "/tmp/out.md",
-            ".obsidian/x.md",
-            "notes.txt",
-            "",
+    fn topics_are_created_on_first_todo_and_listed_in_order() -> Result<()> {
+        let mut store = store();
+        store.add_to("projects/dev", Todo::new(id("b"), "b", today()))?;
+        store.add_to("a.md", Todo::new(id("a"), "a", today()))?;
+        store.add_to("projects/dev", Todo::new(id("c"), "c", today()))?;
+        assert_eq!(store.topics()?, ["a", "projects/dev"]);
+        let listed: Vec<(String, String)> = store
+            .todos_by_topic(None)?
+            .into_iter()
+            .map(|(topic, todo)| (topic, todo.id.0))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("a".into(), "a".into()),
+                ("projects/dev".into(), "b".into()),
+                ("projects/dev".into(), "c".into()),
+            ]
+        );
+        assert_eq!(store.todos_by_topic(Some("a.md"))?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn bad_topic_names_and_taken_ids_are_refused() -> Result<()> {
+        let mut store = store();
+        for topic in [
+            "../out",
+            "/tmp/out",
+            ".obsidian/x",
+            "a//b",
+            " ",
+            "a/ b",
+            "a\\b",
         ] {
             assert!(
                 matches!(
-                    store.add_to(note, Todo::new(Id(String::new()), "x", today())),
-                    Err(Error::BadNote(_))
+                    store.add_to(topic, Todo::new(id("x"), "x", today())),
+                    Err(Error::BadTopic(_))
                 ),
-                "{note}"
+                "{topic}"
             );
         }
-        assert_eq!(store.todos().count(), 0);
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
+        store.remove(&id("a"))?;
+        // Even a deleted todo keeps its id.
+        assert!(matches!(
+            store.add_to("todo", Todo::new(id("a"), "again", today())),
+            Err(Error::DuplicateId(_))
+        ));
         Ok(())
     }
 
     #[test]
-    fn update_keeps_edits_made_in_obsidian() -> Result<()> {
-        let dir = vault(&[("todo.md", "- [ ] a ^aaaaaa\n")]);
-        let mut store = Store::open(dir.path(), "todo.md")?;
-        // Obsidian adds a line after we loaded.
-        fs::write(
-            dir.path().join("todo.md"),
-            "- [ ] a ^aaaaaa\n- [ ] b ^bbbbbb\n",
-        )
-        .expect("write");
-        store.update(&id("aaaaaa"), |t| t.complete(today()))?;
+    fn update_changes_fields_but_not_the_id() -> Result<()> {
+        let mut store = store();
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
+        let saved = store.update(&id("a"), |t| {
+            t.complete(today());
+            t.id = id("other");
+        })?;
+        assert_eq!(saved.id, id("a"));
+        assert_eq!(saved.status, Status::Done);
+        assert_eq!(store.get(&id("a"))?, Some(saved));
+        assert!(matches!(
+            store.update(&id("zzz"), |_| {}),
+            Err(Error::NotFound(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_and_recur_are_saved() -> Result<()> {
+        let mut store = store();
+        let mut todo = Todo::new(id("a"), "a", today());
+        todo.pinned = true;
+        todo.recur = Some(Recur {
+            every: 2,
+            unit: Unit::Month,
+        });
+        assert_eq!(store.add_to("todo", todo.clone())?, todo);
+        let saved = store.update(&id("a"), |t| {
+            t.pinned = false;
+            t.recur = None;
+        })?;
+        assert_eq!((saved.pinned, saved.recur), (false, None));
+        assert_eq!(store.get(&id("a"))?, Some(saved));
+        Ok(())
+    }
+
+    #[test]
+    fn editing_a_recurring_todo_keeps_it_recurring() -> Result<()> {
+        let mut store = store();
+        let todo = store.add_to("gym", Todo::new(id("g1"), "gym", today()))?;
+        let weekly = Some(Recur {
+            every: 1,
+            unit: Unit::Week,
+        });
+        let saved = store.update(&todo.id, |t| t.recur = weekly)?;
+        assert_eq!(saved.recur, weekly);
+        let renamed = store.update(&todo.id, |t| "swim".clone_into(&mut t.text))?;
+        assert_eq!(renamed.recur, weekly);
+        assert_eq!(store.get(&todo.id)?.and_then(|t| t.recur), weekly);
+        Ok(())
+    }
+
+    #[test]
+    fn completing_a_recurring_todo_adds_the_next_one_once() -> Result<()> {
+        let mut store = store();
+        let mut todo = Todo::new(id("a"), "water plants", today());
+        todo.due = NaiveDate::from_ymd_opt(2026, 10, 20);
+        todo.recur = Some(Recur {
+            every: 1,
+            unit: Unit::Week,
+        });
+        store.add_to("home", todo)?;
+        let done = store.update(&id("a"), |t| t.complete(today()))?;
+        assert_eq!((done.status, done.recur), (Status::Done, None));
+        // Completing again, or reopening and completing, adds nothing more.
+        store.update(&id("a"), |t| t.complete(today()))?;
+        store.update(&id("a"), Todo::reopen)?;
+        store.update(&id("a"), |t| t.complete(today()))?;
+        let todos = store.todos_by_topic(Some("home"))?;
+        assert_eq!(todos.len(), 2);
+        let next = &todos[1].1;
+        assert_eq!(next.text, "water plants");
+        assert_eq!(next.status, Status::Todo);
+        assert_eq!(next.due, NaiveDate::from_ymd_opt(2026, 10, 27));
+        assert!(next.recur.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn remove_hides_the_todo_but_keeps_the_row() -> Result<()> {
+        let mut store = store();
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
+        assert_eq!(store.remove(&id("a"))?.text, "a");
+        assert_eq!(store.get(&id("a"))?, None);
+        assert_eq!(store.todos_by_topic(None)?, Vec::new());
+        assert!(matches!(store.remove(&id("a")), Err(Error::NotFound(_))));
+        let rows: i64 = store.conn.query_row(
+            "SELECT count(*) FROM todos WHERE deleted_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(rows, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn changes_since_a_cursor() -> Result<()> {
+        let mut store = store();
+        store.add_to("todo", Todo::new(id("a"), "a", today()))?;
+        store.add_to("b", Todo::new(id("b"), "b", today()))?;
+        let all = store.changes(0)?;
+        assert_eq!(all.topics.len(), 2);
+        let ids: Vec<&str> = all.todos.iter().map(|c| c.todo.id.0.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(store.changes(all.cursor)?.todos, []);
+
+        store.update(&id("a"), |t| t.text = "a2".into())?;
+        store.remove(&id("b"))?;
+        // A no-op change bumps nothing.
+        store.update(&id("a"), |_| {})?;
+        let next = store.changes(all.cursor)?;
+        assert!(next.cursor > all.cursor);
+        assert_eq!(next.topics, []);
+        let changed: Vec<(&str, &str, bool)> = next
+            .todos
+            .iter()
+            .map(|c| (c.todo.id.0.as_str(), c.todo.text.as_str(), c.deleted))
+            .collect();
+        assert_eq!(changed, [("a", "a2", false), ("b", "b", true)]);
+        assert_eq!(next.todos[1].topic, "b");
+        assert!(store.is_deleted(&id("b"))?);
+        assert!(!store.is_deleted(&id("a"))?);
+        assert_eq!(store.changes(next.cursor)?.todos, []);
+        Ok(())
+    }
+
+    #[test]
+    fn reopening_the_file_keeps_everything() -> Result<()> {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("state/todo.db");
+        let todo = Store::open(&path)?.add_to("todo", Todo::new(id("a"), "a", today()))?;
+        assert_eq!(Store::open(&path)?.get(&id("a"))?, Some(todo));
+        Ok(())
+    }
+
+    #[test]
+    fn import_copies_the_vault_once() -> Result<()> {
+        let dir = vault(&[
+            (
+                "todo.md",
+                "# Todo\n- [ ] a 📅 2026-10-30 #dev ^aaaaaa\n- [x] b ✅ 2026-10-20 ^bbbbbb\n",
+            ),
+            (
+                "projects/dev.md",
+                "- [/] c ⏫ ➕ 2026-10-01 ^cccccc\n- [ ] no id\n",
+            ),
+            ("empty.md", "Just text.\n"),
+            (".obsidian/x.md", "- [ ] hidden ^hidden\n"),
+        ]);
+        let mut store = store();
+        let first = store.import_vault(dir.path())?;
         assert_eq!(
-            read(&dir, "todo.md"),
-            "- [x] a ✅ 2026-10-25 ^aaaaaa\n- [ ] b ^bbbbbb\n"
+            first,
+            Imported {
+                topics: 3,
+                added: 4,
+                skipped: 0
+            }
         );
-        assert!(store.get(&id("bbbbbb")).is_some());
-        Ok(())
-    }
+        assert_eq!(store.topics()?, ["empty", "projects/dev", "todo"]);
+        let a = store.get(&id("aaaaaa"))?.expect("a");
+        assert_eq!(a.due, NaiveDate::from_ymd_opt(2026, 10, 30));
+        assert_eq!(a.tags, ["dev"]);
+        let b = store.get(&id("bbbbbb"))?.expect("b");
+        assert_eq!(b.done, NaiveDate::from_ymd_opt(2026, 10, 20));
+        let c = store.get(&id("cccccc"))?.expect("c");
+        assert_eq!(c.status, Status::InProgress);
+        assert_eq!(c.created, NaiveDate::from_ymd_opt(2026, 10, 1));
 
-    #[test]
-    fn remove_deletes_the_line() -> Result<()> {
-        let dir = vault(&[("todo.md", "# Todo\n- [ ] a ^aaaaaa\n- [ ] b ^bbbbbb\n")]);
-        let mut store = Store::open(dir.path(), "todo.md")?;
-        assert_eq!(store.remove(&id("aaaaaa"))?.text, "a");
-        assert_eq!(read(&dir, "todo.md"), "# Todo\n- [ ] b ^bbbbbb\n");
-        assert_eq!(store.get(&id("aaaaaa")), None);
-        Ok(())
-    }
-
-    #[test]
-    fn rescan_picks_up_new_moved_and_deleted_notes() -> Result<()> {
-        let dir = vault(&[("a.md", "- [ ] a ^aaaaaa\n"), ("b.md", "- [ ] b ^bbbbbb\n")]);
-        let mut store = Store::open(dir.path(), "a.md")?;
-        fs::create_dir(dir.path().join("trips")).expect("mkdir");
-        fs::rename(dir.path().join("a.md"), dir.path().join("trips/a.md")).expect("mv");
-        fs::remove_file(dir.path().join("b.md")).expect("rm");
-        fs::write(dir.path().join("c.md"), "- [ ] c ^cccccc\n").expect("write");
-        store.rescan()?;
-        let notes: Vec<&Path> = store.notes().collect();
-        assert_eq!(notes, [Path::new("c.md"), Path::new("trips/a.md")]);
-        // A moved todo keeps its id.
-        assert_eq!(store.get(&id("aaaaaa")).map(|t| t.text.as_str()), Some("a"));
-        assert_eq!(store.get(&id("bbbbbb")), None);
-        Ok(())
-    }
-
-    #[test]
-    fn unknown_or_taken_ids_are_refused() -> Result<()> {
-        let dir = vault(&[("a.md", "- [ ] a ^aaaaaa\n"), ("b.md", "- [ ] b ^bbbbbb\n")]);
-        let mut store = Store::open(dir.path(), "a.md")?;
-        assert!(matches!(
-            store.update(&id("zzzzzz"), |_| {}),
-            Err(Error::Md(todo_md::Error::NotFound(_)))
-        ));
-        assert!(matches!(
-            store.update(&id("bbbbbb"), |t| t.id = id("aaaaaa")),
-            Err(Error::Md(todo_md::Error::DuplicateId(_)))
-        ));
-        assert_eq!(read(&dir, "b.md"), "- [ ] b ^bbbbbb\n");
-        assert!(store.get(&id("bbbbbb")).is_some());
+        let again = store.import_vault(dir.path())?;
+        assert_eq!(
+            again,
+            Imported {
+                topics: 3,
+                added: 0,
+                skipped: 4
+            }
+        );
+        assert_eq!(store.todos_by_topic(None)?.len(), 4);
         Ok(())
     }
 }

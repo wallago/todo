@@ -1,0 +1,16 @@
+# configuration for https://github.com/crate-ci/typos
+
+[default.extend-words]
+# Whitelist false positives: format is word = "word"
+# Example:
+# kubernetes = "kubernetes"
+ratatui = "ratatui"
+
+[files]
+# Exclude files or directories from checking
+extend-exclude = [
+  "CHANGELOG.md",
+  # Sample Obsidian note: test data, not prose
+  "vault",
+  "pnpm-lock.yaml",
+]

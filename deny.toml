@@ -1,0 +1,42 @@
+# configuration for https://github.com/EmbarkStudios/cargo-deny
+
+[licenses]
+# license detection confidence (0.0 - 1.0)
+confidence-threshold = 0.8
+# allowed licenses — add or remove based on your requirements
+allow = [
+  "MPL-2.0",
+  "MIT",
+  "Apache-2.0",
+  "Unicode-DFS-2016",
+  "Unicode-3.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "Zlib",
+  "ISC",
+  # webpki-root-certs: the Mozilla CA list, a permissive data licence
+  "CDLA-Permissive-2.0",
+]
+
+[sources]
+# block dependencies from unknown registries
+unknown-registry = "deny"
+# warn on dependencies from unknown git sources
+unknown-git = "warn"
+# only allow crates.io
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[advisories]
+# only flag unmaintained crates you depend on directly — a transitive one is
+# rarely actionable, and "unmaintained" is a maintenance signal, not a
+# vulnerability. Security advisories are still denied everywhere, regardless.
+unmaintained = "workspace"
+# ignore specific RustSec advisories (e.g. no fix available yet)
+# review periodically and remove once fixed
+ignore = [
+  # "RUSTSEC-YYYY-NNNN",
+  # chrono is unmaintained, not unsafe: dates are core here (rusqlite, the
+  # store, the TUI), so moving off it (jiff?) is its own change.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no vulnerability; replacing it is its own change" },
+]

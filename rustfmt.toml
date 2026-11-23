@@ -1,0 +1,20 @@
+# configuration for https://rust-lang.github.io/rustfmt/
+
+# Rust edition
+edition = "2024"
+# max line width before wrapping
+max_width = 100
+# Point { x } instead of Point { x: x }
+use_field_init_shorthand = true
+# val? instead of try!(val)
+use_try_shorthand = true
+
+# ── Optional (uncomment as needed) ──────────────────────────
+# indent with 2 spaces instead of 4
+# tab_spaces = 2
+
+# ── Nightly only (requires cargo +nightly fmt) ─────────────
+# merge use statements by crate
+# imports_granularity = "Crate"
+# group imports: std, external, then local
+group_imports = "StdExternalCrate"
