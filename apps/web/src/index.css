@@ -367,6 +367,17 @@ label.check input {
   min-width: 0;
 }
 
+.due {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.due button {
+  margin-bottom: 12px;
+}
+
 .buttons {
   display: flex;
   align-items: center;
