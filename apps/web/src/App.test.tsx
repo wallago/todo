@@ -142,7 +142,7 @@ describe("App", () => {
     fireEvent.click(within(form).getByRole("button", { name: "Clear due date" }));
     expect((within(form).getByLabelText("Due") as HTMLInputElement).value).toBe("");
     fireEvent.click(within(form).getByRole("button", { name: "Save" }));
-    expect(screen.getByText("Nothing due this week.")).toBeDefined();
+    expect(screen.getByText("Nothing due.")).toBeDefined();
     expect(await screen.findByText("offline · 1 to send")).toBeDefined();
   });
 
