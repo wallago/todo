@@ -129,10 +129,22 @@ export function TodoForm({ entry, topic, topics, onSave, onDelete, onClose }: Pr
           ))}
         </datalist>
         <div className="row">
-          <label>
-            Due
-            <input type="date" value={fields.due} onChange={(e) => set("due", e.target.value)} />
-          </label>
+          <div className="due">
+            <label>
+              Due
+              <input type="date" value={fields.due} onChange={(e) => set("due", e.target.value)} />
+            </label>
+            {fields.due && (
+              <button
+                type="button"
+                className="icon"
+                aria-label="Clear due date"
+                onClick={() => set("due", "")}
+              >
+                ×
+              </button>
+            )}
+          </div>
           <label>
             Priority
             <select

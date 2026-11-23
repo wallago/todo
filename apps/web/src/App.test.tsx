@@ -121,6 +121,21 @@ describe("App", () => {
     expect(topic.querySelector(".count")?.textContent).toBe("1 open · 1 late");
   });
 
+  test("a due date can be cleared", async () => {
+    const store = new Store(
+      storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", isoDate()) }),
+      offline,
+    );
+    render(<App store={store} />);
+    fireEvent.click(screen.getByText("buy milk"));
+    const form = screen.getByRole("dialog", { name: "Edit" });
+    fireEvent.click(within(form).getByRole("button", { name: "Clear due date" }));
+    expect((within(form).getByLabelText("Due") as HTMLInputElement).value).toBe("");
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    expect(screen.getByText("Nothing due this week.")).toBeDefined();
+    expect(await screen.findByText("offline · 1 to send")).toBeDefined();
+  });
+
   test("ticking a todo moves it to done", () => {
     const store = new Store(
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
