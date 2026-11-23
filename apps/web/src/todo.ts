@@ -132,3 +132,30 @@ export function byUrgency(a: Todo, b: Todo): number {
     PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority)
   );
 }
+
+/** How many todos there are, by state, as the TUI dashboard counts them. */
+export interface Counts {
+  total: number;
+  /** Done or cancelled. */
+  done: number;
+  open: number;
+  /** Open and due before today. */
+  late: number;
+  /** Open and due today. */
+  today: number;
+}
+
+/** Counts `todos` by state. */
+export function countTodos(todos: Todo[], today = isoDate()): Counts {
+  const counts = { total: todos.length, done: 0, open: 0, late: 0, today: 0 };
+  for (const todo of todos) {
+    if (isClosed(todo)) {
+      counts.done++;
+      continue;
+    }
+    counts.open++;
+    if (todo.due && todo.due < today) counts.late++;
+    if (todo.due === today) counts.today++;
+  }
+  return counts;
+}

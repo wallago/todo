@@ -1,6 +1,6 @@
 import type { Entry } from "../replica";
 import { topicHref } from "../route";
-import { byUrgency, endOfWeek, isClosed, isoDate } from "../todo";
+import { byUrgency, countTodos, endOfWeek, isClosed, isoDate } from "../todo";
 import { TodoRow } from "./TodoRow";
 
 interface ListProps {
@@ -61,23 +61,61 @@ export function PinnedPage({ todos, ...list }: PageProps) {
   return <TodoList entries={pinned} showTopic {...list} />;
 }
 
-/** Every topic, with how many todos are still open in it. */
+/** A bar filled to `done` of `total`. */
+function Progress({ done, total }: { done: number; total: number }) {
+  return (
+    <span className="progress" aria-hidden="true">
+      <span style={{ width: `${total ? (100 * done) / total : 0}%` }} />
+    </span>
+  );
+}
+
+/** One number of the summary card. */
+function Tile({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  return (
+    <div className="tile">
+      <span>{label}</span>
+      <strong className={value > 0 ? tone : undefined}>{value}</strong>
+    </div>
+  );
+}
+
+/** A card of counts over every todo, then each topic with its own. */
 export function TopicsPage({ topics, todos }: { topics: string[]; todos: Entry[] }) {
   if (topics.length === 0) return <p className="empty">No topics yet.</p>;
+  const all = countTodos(todos.map((e) => e.todo));
   return (
-    <ul>
-      {topics.map((topic) => {
-        const open = todos.filter((e) => e.topic === topic && !isClosed(e.todo)).length;
-        return (
-          <li key={topic} className="topic">
-            <a href={topicHref(topic)}>
-              <span>{topic}</span>
-              <span className="count">{open} open</span>
-            </a>
-          </li>
-        );
-      })}
-    </ul>
+    <>
+      <section className="summary" aria-label="Summary">
+        <div className="tiles">
+          <Tile label="Late" value={all.late} tone="late" />
+          <Tile label="Today" value={all.today} tone="today" />
+          <Tile label="Open" value={all.open} />
+          <Tile label="Done" value={all.done} tone="done" />
+        </div>
+        <Progress done={all.done} total={all.total} />
+        <span className="ratio">
+          {all.done}/{all.total} done
+        </span>
+      </section>
+      <ul>
+        {topics.map((topic) => {
+          const counts = countTodos(todos.filter((e) => e.topic === topic).map((e) => e.todo));
+          return (
+            <li key={topic} className="topic">
+              <a href={topicHref(topic)}>
+                <span className="name">{topic}</span>
+                <span className="count">
+                  {counts.open} open
+                  {counts.late > 0 && <span className="late"> · {counts.late} late</span>}
+                </span>
+                <Progress done={counts.done} total={counts.total} />
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
 
