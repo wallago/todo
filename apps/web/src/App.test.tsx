@@ -57,6 +57,16 @@ describe("App", () => {
     expect(screen.getByText("buy milk")).toBeDefined();
   });
 
+  test("todos due after this week show under Later", () => {
+    const store = new Store(
+      storage({ [KEYS.token]: "t", [KEYS.replica]: saved("renew passport", isoDate(30)) }),
+      offline,
+    );
+    render(<App store={store} />);
+    expect(screen.getByRole("heading", { name: "Later (1)" })).toBeDefined();
+    expect(screen.getByText("renew passport")).toBeDefined();
+  });
+
   test("adding offline shows the todo and how many changes wait", async () => {
     const store = new Store(
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
@@ -78,7 +88,7 @@ describe("App", () => {
       offline,
     );
     render(<App store={store} />);
-    expect(screen.getByText("Nothing due this week.")).toBeDefined();
+    expect(screen.getByText("Nothing due.")).toBeDefined();
     expect(screen.getByRole("link", { name: "Pinned" }).getAttribute("href")).toBe("#/pinned");
     window.location.hash = "#/pinned";
     expect(await screen.findByText("water plants")).toBeDefined();
