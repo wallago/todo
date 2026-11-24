@@ -87,6 +87,11 @@ export function isClosed(todo: Todo): boolean {
   return todo.status === "done" || todo.status === "cancelled";
 }
 
+/** Done (not cancelled) on `day`. */
+export function isDoneOn(todo: Todo, day: string): boolean {
+  return todo.status === "done" && todo.done === day;
+}
+
 /** The todo a new one starts as, like `NewTodo::to_todo`. */
 export function newTodo(body: NewTodo, today: string): Todo {
   return {

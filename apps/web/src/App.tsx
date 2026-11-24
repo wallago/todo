@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { updateBadge } from "./badge";
-import { DuePage, PinnedPage, TopicPage, TopicsPage } from "./components/Pages";
+import { DoneTodayPage, DuePage, PinnedPage, TopicPage, TopicsPage } from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
 import type { Entry } from "./replica";
@@ -119,6 +119,8 @@ export function App({ store }: { store: Store }) {
       <main>
         {route.page === "topic" ? (
           <TopicPage topic={route.topic} {...list} />
+        ) : route.page === "done-today" ? (
+          <DoneTodayPage {...list} />
         ) : route.page === "pinned" ? (
           <PinnedPage {...list} />
         ) : route.page === "topics" ? (

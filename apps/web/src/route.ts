@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 /** A page of the app, from the URL hash. */
 export type Route =
   | { page: "due" }
+  | { page: "done-today" }
   | { page: "pinned" }
   | { page: "topics" }
   | { page: "topic"; topic: string };
@@ -14,19 +15,20 @@ export const TABS = [
   { page: "topics", href: "#/topics", label: "Topics" },
 ] as const;
 
-/** Reads `#/`, `#/pinned`, `#/topics` or `#/topic/<name>`. */
+/** Reads `#/`, `#/done-today`, `#/pinned`, `#/topics` or `#/topic/<name>`. */
 export function parseRoute(hash: string): Route {
   const path = hash.replace(/^#\/?/, "");
   if (path.startsWith("topic/"))
     return { page: "topic", topic: decodeURIComponent(path.slice("topic/".length)) };
   if (path === "topics") return { page: "topics" };
   if (path === "pinned") return { page: "pinned" };
+  if (path === "done-today") return { page: "done-today" };
   return { page: "due" };
 }
 
-/** The tab a page sits under: a topic's page is under Topics. */
+/** The tab a page sits under: a topic's page is under Topics, done today under Due. */
 export function tabOf(route: Route): number {
-  const page = route.page === "topic" ? "topics" : route.page;
+  const page = route.page === "topic" ? "topics" : route.page === "done-today" ? "due" : route.page;
   return TABS.findIndex((tab) => tab.page === page);
 }
 

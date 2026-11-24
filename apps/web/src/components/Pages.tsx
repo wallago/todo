@@ -1,6 +1,6 @@
 import type { Entry } from "../replica";
 import { topicHref } from "../route";
-import { byUrgency, countTodos, endOfWeek, isClosed, isoDate } from "../todo";
+import { byUrgency, countTodos, endOfWeek, isClosed, isDoneOn, isoDate } from "../todo";
 import { TodoRow } from "./TodoRow";
 
 interface ListProps {
@@ -28,9 +28,19 @@ function TodoList({ entries, showTopic, onToggle, onOpen }: ListProps) {
 
 type PageProps = Omit<ListProps, "entries" | "showTopic"> & { todos: Entry[] };
 
+/** Link to the done-today page, with how many todos were done today. */
+function DoneTodayLink({ count }: { count: number }) {
+  return (
+    <a className="done-today" href="#/done-today">
+      <span className={count > 0 ? "done" : undefined}>✓ {count}</span> done today
+    </a>
+  );
+}
+
 /** Late, today, this week, then later: every open todo with a due date. */
 export function DuePage({ todos, ...list }: PageProps) {
   const today = isoDate();
+  const doneToday = todos.filter((e) => isDoneOn(e.todo, today)).length;
   const sunday = endOfWeek();
   const open = todos.filter((e) => !isClosed(e.todo)).sort((a, b) => byUrgency(a.todo, b.todo));
   const sections: [string, Entry[]][] = [
@@ -40,17 +50,37 @@ export function DuePage({ todos, ...list }: PageProps) {
     ["Later", open.filter((e) => e.todo.due && e.todo.due > sunday)],
   ];
   const shown = sections.filter(([, entries]) => entries.length > 0);
-  if (shown.length === 0) {
-    return <p className="empty">{todos.length ? "Nothing due." : "No todos yet."}</p>;
-  }
-  return shown.map(([title, entries]) => (
-    <section key={title}>
-      <h2>
-        {title} ({entries.length})
-      </h2>
-      <TodoList entries={entries} showTopic {...list} />
-    </section>
-  ));
+  if (todos.length === 0) return <p className="empty">No todos yet.</p>;
+  return (
+    <>
+      <DoneTodayLink count={doneToday} />
+      {shown.length === 0 && <p className="empty">Nothing due.</p>}
+      {shown.map(([title, entries]) => (
+        <section key={title}>
+          <h2>
+            {title} ({entries.length})
+          </h2>
+          <TodoList entries={entries} showTopic {...list} />
+        </section>
+      ))}
+    </>
+  );
+}
+
+/** The todos done today, across topics; unticking one puts it back. */
+export function DoneTodayPage({ todos, ...list }: PageProps) {
+  const today = isoDate();
+  const done = todos.filter((e) => isDoneOn(e.todo, today));
+  return (
+    <>
+      <h1>Done today ({done.length})</h1>
+      {done.length ? (
+        <TodoList entries={done} showTopic {...list} />
+      ) : (
+        <p className="empty">Nothing done yet today.</p>
+      )}
+    </>
+  );
 }
 
 /** Every open pinned todo, across topics. */
