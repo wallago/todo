@@ -272,6 +272,21 @@ li.topic .progress {
   flex-basis: 100%;
 }
 
+a.done-today {
+  display: block;
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent-bis);
+  border-radius: 12px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+a.done-today span {
+  font-weight: 600;
+}
+
 .empty {
   color: var(--muted);
   padding: 24px 0;

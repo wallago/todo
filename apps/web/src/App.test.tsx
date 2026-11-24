@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test } from "vitest";
 import { App, statusText } from "./App";
 import { addTodo, emptyReplica } from "./replica";
 import { KEYS, Store } from "./store";
-import { isoDate } from "./todo";
+import { isoDate, type Status } from "./todo";
 
 /** In-memory `localStorage`. */
 function storage(items: Record<string, string> = {}) {
@@ -18,7 +18,7 @@ function storage(items: Record<string, string> = {}) {
 /** A server that is down. */
 const offline = (() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
 
-function saved(text: string, due: string | null, pinned = false) {
+function saved(text: string, due: string | null, pinned = false, status: Status = "todo") {
   const replica = addTodo(
     emptyReplica(),
     {
@@ -31,7 +31,7 @@ function saved(text: string, due: string | null, pinned = false) {
       pinned,
       recur: null,
     },
-    "todo",
+    status,
     isoDate(),
   );
   return JSON.stringify({ ...replica, outbox: [] });
@@ -144,6 +144,23 @@ describe("App", () => {
     fireEvent.click(within(form).getByRole("button", { name: "Save" }));
     expect(screen.getByText("Nothing due.")).toBeDefined();
     expect(await screen.findByText("offline · 1 to send")).toBeDefined();
+  });
+
+  test("the Due page counts todos done today and lists them on their own page", async () => {
+    const store = new Store(
+      storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", isoDate(), false, "done") }),
+      offline,
+    );
+    render(<App store={store} />);
+    expect(screen.getByText("Nothing due.")).toBeDefined();
+    const link = screen.getByRole("link", { name: "✓ 1 done today" });
+    expect(link.getAttribute("href")).toBe("#/done-today");
+    window.location.hash = "#/done-today";
+    expect(await screen.findByRole("heading", { name: "Done today (1)" })).toBeDefined();
+    expect(screen.getByText("buy milk")).toBeDefined();
+    expect(screen.getByRole("link", { name: "Due" }).className).toBe("active");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Done: buy milk" }));
+    expect(screen.getByText("Nothing done yet today.")).toBeDefined();
   });
 
   test("ticking a todo moves it to done", () => {
