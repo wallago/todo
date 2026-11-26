@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { updateBadge } from "./badge";
+import { BottomBar, Drawer, GearButton } from "./components/Nav";
 import { DoneTodayPage, DuePage, PinnedPage, TopicPage, TopicsPage } from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
@@ -43,6 +44,7 @@ export function App({ store }: { store: Store }) {
   // `null`: adding a todo; an entry: editing it; `undefined`: closed.
   const [editing, setEditing] = useState<Entry | null | undefined>(undefined);
   const [settings, setSettings] = useState(!token);
+  const [drawer, setDrawer] = useState(false);
   useAutoSync(store);
   // Every sync and local change makes a new copy, so the icon follows both.
   useEffect(() => void updateBadge(replica.todos, isoDate()), [replica]);
@@ -52,7 +54,7 @@ export function App({ store }: { store: Store }) {
       const next = TABS[tab + step];
       if (next) window.location.hash = next.href;
     },
-    editing === undefined && !settings,
+    editing === undefined && !settings && !drawer,
   );
 
   const list = {
@@ -81,18 +83,14 @@ export function App({ store }: { store: Store }) {
     }
     setEditing(undefined);
   };
+  const closeDrawer = useCallback(() => setDrawer(false), []);
   const status = statusText(problem, replica.outbox.length, refused);
 
   return (
     <>
       <header>
-        <nav>
-          {TABS.map(({ href, label }, i) => (
-            <a key={href} href={href} className={i === tab ? "active" : ""}>
-              {label}
-            </a>
-          ))}
-        </nav>
+        <GearButton onClick={() => setDrawer(true)} />
+        <span className="title">{TABS[tab]?.label}</span>
         <output className={refused || problem === "token refused" ? "status error" : "status"}>
           {status}
         </output>
@@ -106,14 +104,6 @@ export function App({ store }: { store: Store }) {
           }}
         >
           ⟳
-        </button>
-        <button
-          type="button"
-          className="icon"
-          aria-label="Settings"
-          onClick={() => setSettings(true)}
-        >
-          ⚙
         </button>
       </header>
       <main>
@@ -137,6 +127,10 @@ export function App({ store }: { store: Store }) {
       >
         +
       </button>
+      <BottomBar active={tab} />
+      {drawer && (
+        <Drawer status={status} onSettings={() => setSettings(true)} onClose={closeDrawer} />
+      )}
       {editing !== undefined && (
         <TodoForm
           entry={editing}
