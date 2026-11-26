@@ -277,7 +277,8 @@ li.todo.in_progress .text::before {
   color: var(--muted);
 }
 
-li.topic a {
+li.topic a,
+li.day a {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
@@ -288,13 +289,15 @@ li.topic a {
   text-decoration: none;
 }
 
-li.topic .name {
+li.topic .name,
+li.day .name {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-li.topic .count {
+li.topic .count,
+li.day .count {
   flex: none;
   color: var(--muted);
 }

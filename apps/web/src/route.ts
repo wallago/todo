@@ -4,6 +4,8 @@ import { useSyncExternalStore } from "react";
 export type Route =
   | { page: "due" }
   | { page: "done-today" }
+  | { page: "done"; day: string }
+  | { page: "history" }
   | { page: "pinned" }
   | { page: "topics" }
   | { page: "topic"; topic: string };
@@ -15,7 +17,10 @@ export const TABS = [
   { page: "topics", href: "#/topics", label: "Topics" },
 ] as const;
 
-/** Reads `#/`, `#/done-today`, `#/pinned`, `#/topics` or `#/topic/<name>`. */
+/**
+ * Reads `#/`, `#/done-today`, `#/done/<day>`, `#/history`, `#/pinned`, `#/topics`
+ * or `#/topic/<name>`.
+ */
 export function parseRoute(hash: string): Route {
   const path = hash.replace(/^#\/?/, "");
   if (path.startsWith("topic/"))
@@ -23,10 +28,15 @@ export function parseRoute(hash: string): Route {
   if (path === "topics") return { page: "topics" };
   if (path === "pinned") return { page: "pinned" };
   if (path === "done-today") return { page: "done-today" };
+  if (/^done\/\d{4}-\d{2}-\d{2}$/.test(path)) return { page: "done", day: path.slice(5) };
+  if (path === "history") return { page: "history" };
   return { page: "due" };
 }
 
-/** The tab a page sits under: a topic's page is under Topics, done today under Due. */
+/**
+ * The tab a page sits under: a topic's page is under Topics, done today under Due.
+ * History and its days are in the drawer, under no tab: -1.
+ */
 export function tabOf(route: Route): number {
   const page = route.page === "topic" ? "topics" : route.page === "done-today" ? "due" : route.page;
   return TABS.findIndex((tab) => tab.page === page);

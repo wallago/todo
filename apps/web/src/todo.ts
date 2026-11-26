@@ -92,6 +92,26 @@ export function isDoneOn(todo: Todo, day: string): boolean {
   return todo.status === "done" && todo.done === day;
 }
 
+/** How many todos were done on each day, newest day first. */
+export function doneByDay(todos: Todo[]): { day: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const todo of todos)
+    if (todo.status === "done" && todo.done)
+      counts.set(todo.done, (counts.get(todo.done) ?? 0) + 1);
+  return [...counts]
+    .map(([day, count]) => ({ day, count }))
+    .sort((a, b) => (a.day < b.day ? 1 : -1));
+}
+
+/** `Today`, `Yesterday`, or a short date like `Mon 23 Nov` for a `YYYY-MM-DD` day. */
+export function dayLabel(day: string, today: string = isoDate()): string {
+  if (day === today) return "Today";
+  const date = new Date(`${day}T00:00`);
+  if (isoDate(1, date) === today) return "Yesterday";
+  const opts = { weekday: "short", day: "numeric", month: "short" } as const;
+  return date.toLocaleDateString("en-GB", opts).replace(",", "");
+}
+
 /** The todo a new one starts as, like `NewTodo::to_todo`. */
 export function newTodo(body: NewTodo, today: string): Todo {
   return {

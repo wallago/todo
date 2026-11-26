@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { countTodos, isDoneOn, type Todo } from "./todo";
+import { countTodos, dayLabel, doneByDay, isDoneOn, type Todo } from "./todo";
 
 function todo(status: Todo["status"], due: string | null = null): Todo {
   return { id: "x", text: "x", status, priority: "normal", created: "2026-11-01", due };
@@ -28,4 +28,25 @@ test("isDoneOn needs status done and that done date", () => {
   expect(isDoneOn({ ...todo("done"), done: "2026-11-23" }, day)).toBe(false);
   expect(isDoneOn({ ...todo("cancelled"), done: day }, day)).toBe(false);
   expect(isDoneOn(todo("todo"), day)).toBe(false);
+});
+
+test("doneByDay counts done todos per day, newest first", () => {
+  const done = (day: string): Todo => ({ ...todo("done"), done: day });
+  const todos = [
+    done("2026-11-23"),
+    done("2026-11-25"),
+    done("2026-11-23"),
+    { ...todo("cancelled"), done: "2026-11-24" },
+    todo("todo"),
+  ];
+  expect(doneByDay(todos)).toEqual([
+    { day: "2026-11-25", count: 1 },
+    { day: "2026-11-23", count: 2 },
+  ]);
+});
+
+test("dayLabel names today, yesterday, then the date", () => {
+  expect(dayLabel("2026-11-26", "2026-11-26")).toBe("Today");
+  expect(dayLabel("2026-11-25", "2026-11-26")).toBe("Yesterday");
+  expect(dayLabel("2026-11-23", "2026-11-26")).toBe("Mon 23 Nov");
 });

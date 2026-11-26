@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { updateBadge } from "./badge";
 import { BottomBar, Drawer, GearButton } from "./components/Nav";
-import { DoneTodayPage, DuePage, PinnedPage, TopicPage, TopicsPage } from "./components/Pages";
+import {
+  DoneDayPage,
+  DuePage,
+  HistoryPage,
+  PinnedPage,
+  TopicPage,
+  TopicsPage,
+} from "./components/Pages";
 import { type Fields, parseTags, patchOf, TodoForm } from "./components/TodoForm";
 import { TokenForm } from "./components/TokenForm";
 import type { Entry } from "./replica";
@@ -51,7 +58,7 @@ export function App({ store }: { store: Store }) {
   const tab = tabOf(route);
   useSwipe(
     (step) => {
-      const next = TABS[tab + step];
+      const next = tab < 0 ? undefined : TABS[tab + step];
       if (next) window.location.hash = next.href;
     },
     editing === undefined && !settings && !drawer,
@@ -90,7 +97,7 @@ export function App({ store }: { store: Store }) {
     <>
       <header>
         <GearButton onClick={() => setDrawer(true)} />
-        <span className="title">{TABS[tab]?.label}</span>
+        <span className="title">{TABS[tab]?.label ?? "History"}</span>
         <output className={refused || problem === "token refused" ? "status error" : "status"}>
           {status}
         </output>
@@ -110,7 +117,11 @@ export function App({ store }: { store: Store }) {
         {route.page === "topic" ? (
           <TopicPage topic={route.topic} {...list} />
         ) : route.page === "done-today" ? (
-          <DoneTodayPage {...list} />
+          <DoneDayPage {...list} />
+        ) : route.page === "done" ? (
+          <DoneDayPage day={route.day} {...list} />
+        ) : route.page === "history" ? (
+          <HistoryPage todos={replica.todos} />
         ) : route.page === "pinned" ? (
           <PinnedPage {...list} />
         ) : route.page === "topics" ? (
