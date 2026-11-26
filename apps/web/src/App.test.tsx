@@ -183,6 +183,26 @@ describe("App", () => {
     expect(screen.getByRole("dialog", { name: "Server token" })).toBeDefined();
   });
 
+  test("the History page, from the drawer, counts todos done per day and opens each day", async () => {
+    const store = new Store(
+      storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null, false, "done") }),
+      offline,
+    );
+    render(<App store={store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    const drawer = screen.getByRole("complementary", { name: "Menu" });
+    const link = within(drawer).getByRole("link", { name: "History" });
+    expect(link.getAttribute("href")).toBe("#/history");
+    fireEvent.click(link);
+    window.location.hash = "#/history";
+    const row = await screen.findByRole("link", { name: /^Today/ });
+    expect(row.querySelector(".count")?.textContent).toBe("✓ 1");
+    expect(row.getAttribute("href")).toBe(`#/done/${isoDate()}`);
+    window.location.hash = `#/done/${isoDate(-1)}`;
+    expect(await screen.findByRole("heading", { name: "Done yesterday (0)" })).toBeDefined();
+    expect(screen.getByText("Nothing done that day.")).toBeDefined();
+  });
+
   test("ticking a todo moves it to done", () => {
     const store = new Store(
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),

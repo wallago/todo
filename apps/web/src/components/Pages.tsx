@@ -1,6 +1,15 @@
 import type { Entry } from "../replica";
 import { topicHref } from "../route";
-import { byUrgency, countTodos, endOfWeek, isClosed, isDoneOn, isoDate } from "../todo";
+import {
+  byUrgency,
+  countTodos,
+  dayLabel,
+  doneByDay,
+  endOfWeek,
+  isClosed,
+  isDoneOn,
+  isoDate,
+} from "../todo";
 import { TodoRow } from "./TodoRow";
 
 interface ListProps {
@@ -67,19 +76,43 @@ export function DuePage({ todos, ...list }: PageProps) {
   );
 }
 
-/** The todos done today, across topics; unticking one puts it back. */
-export function DoneTodayPage({ todos, ...list }: PageProps) {
+/** The todos done on `day` (today by default), across topics; unticking one puts it back. */
+export function DoneDayPage({ todos, day, ...list }: PageProps & { day?: string }) {
   const today = isoDate();
-  const done = todos.filter((e) => isDoneOn(e.todo, today));
+  const shown = day ?? today;
+  const done = todos.filter((e) => isDoneOn(e.todo, shown));
+  const title = shown === today ? "Done today" : `Done ${dayLabel(shown, today).toLowerCase()}`;
+  const none = shown === today ? "Nothing done yet today." : "Nothing done that day.";
   return (
     <>
-      <h1>Done today ({done.length})</h1>
+      <h1>
+        {title} ({done.length})
+      </h1>
       {done.length ? (
         <TodoList entries={done} showTopic {...list} />
       ) : (
-        <p className="empty">Nothing done yet today.</p>
+        <p className="empty">{none}</p>
       )}
     </>
+  );
+}
+
+/** One row per day with something done, newest first, each opening that day's list. */
+export function HistoryPage({ todos }: { todos: Entry[] }) {
+  const days = doneByDay(todos.map((e) => e.todo));
+  if (days.length === 0) return <p className="empty">Nothing done yet.</p>;
+  const today = isoDate();
+  return (
+    <ul>
+      {days.map(({ day, count }) => (
+        <li key={day} className="day">
+          <a href={`#/done/${day}`}>
+            <span className="name">{dayLabel(day, today)}</span>
+            <span className="count">✓ {count}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }
 
