@@ -163,6 +163,26 @@ describe("App", () => {
     expect(screen.getByText("Nothing done yet today.")).toBeDefined();
   });
 
+  test("the gear opens a drawer with Done today and Settings", async () => {
+    const store = new Store(
+      storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
+      offline,
+    );
+    render(<App store={store} />);
+    expect(screen.getByRole("navigation", { name: "Pages" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    const drawer = screen.getByRole("complementary", { name: "Menu" });
+    expect(within(drawer).getByRole("link", { name: "Done today" }).getAttribute("href")).toBe(
+      "#/done-today",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close menu" }));
+    expect(screen.queryByRole("complementary", { name: "Menu" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("complementary", { name: "Menu" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Server token" })).toBeDefined();
+  });
+
   test("ticking a todo moves it to done", () => {
     const store = new Store(
       storage({ [KEYS.token]: "t", [KEYS.replica]: saved("buy milk", null) }),
